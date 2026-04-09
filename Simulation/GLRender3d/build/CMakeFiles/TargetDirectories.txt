@@ -1,0 +1,3 @@
+/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles/GLRender3d.dir
+/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles/edit_cache.dir
+/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles/rebuild_cache.dir
