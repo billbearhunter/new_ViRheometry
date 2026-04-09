@@ -2,6 +2,8 @@
 
 **Virtual Rheometry via MPM Simulation** — Estimates Herschel-Bulkley rheological parameters (η, n, σ_y) from real dam-break flow experiments using CMA-ES optimization with a Mixture-of-Experts surrogate model.
 
+> **Important:** Several scripts use relative imports and **must be run from their own subdirectory**. Every example below includes the required `cd` command — copy and run the whole block.
+
 ---
 
 ## Table of Contents
@@ -35,7 +37,7 @@
 
 ## Installation
 
-Run from the project root (`New_ViRheometry-main/`):
+Run from the project root (`New_ViRheometry/`):
 
 ```bash
 chmod +x build.sh
@@ -60,7 +62,7 @@ chmod +x build.sh
 ## Project Structure
 
 ```
-New_ViRheometry-main/
+New_ViRheometry/
 ├── build.sh
 ├── requirements.txt
 │
@@ -69,17 +71,17 @@ New_ViRheometry-main/
 │   ├── ref_Tonkatsu_5.5_2.3_1/           # Tonkatsu sauce,    H=5.5cm W=2.3cm
 │   └── ref_Tonkatsu_6.7_3.5_1/           # Tonkatsu sauce,    H=6.7cm W=3.5cm
 │
-├── FlowCurve/
+├── FlowCurve/                             # ★ must cd here before running
 │   ├── flowcurve.py
 │   ├── hb_fit.py
 │   ├── param.py
-│   └── Rheo_Data/                         # Anton Paar rheometer CSV files
+│   └── Rheo_Data/
 │
 ├── Calibration/
 │   ├── pipeline.py
 │   └── extract_flow_distance.py
 │
-├── Simulation/
+├── Simulation/                            # ★ must cd here before running
 │   ├── main.py
 │   ├── config/
 │   │   ├── config.py
@@ -93,10 +95,8 @@ New_ViRheometry-main/
 │   │   ├── Creat_dat.py
 │   │   ├── Creat_dataframe.py
 │   │   └── Creat_obj.py
-│   ├── GLRender3d/
-│   │   └── build/GLRender3d              # compiled binary
-│   ├── ParticleSkinner3DTaichi/
-│   │   └── cpp_marching_cubes/build/cpp_marching_cubes
+│   ├── GLRender3d/build/GLRender3d        # compiled binary
+│   ├── ParticleSkinner3DTaichi/cpp_marching_cubes/build/cpp_marching_cubes
 │   ├── model/
 │   │   ├── best_model.joblib
 │   │   └── target_scaler.joblib
@@ -106,14 +106,14 @@ New_ViRheometry-main/
 │   ├── evaluation.py
 │   └── test.py
 │
-└── Optimization/
+└── Optimization/                          # ★ must cd here before running
     ├── optimize_1setup.py
     ├── optimize_2setups.py
     ├── propose_initial_setup.py
     ├── soft_interpolate.py
     ├── visualize_comparison.py
     ├── test_boundary_comparison.py
-    ├── moe_workspace5/                    # Trained MoE model (101 experts)
+    ├── moe_workspace5/
     └── libs/
 ```
 
@@ -121,26 +121,24 @@ New_ViRheometry-main/
 
 ## Data Directory Layout
 
-Each dataset in `data/` follows this structure:
-
 ```
 data/ref_Tonkatsu_6.7_3.5_1/
-├── settings.xml              # Container geometry: H=6.7cm, W=3.5cm
-├── IMG_7796.JPG              # Photo used for camera calibration
-├── Background.png            # Rendered background (output of pipeline.py)
-├── Background_mask.png       # Binary mask (output of pipeline.py)
-├── theta_opt.txt             # Optimized camera parameters
-├── exp/                      # Raw experiment photos
+├── settings.xml                           # H=6.7cm, W=3.5cm
+├── IMG_7796.JPG                           # calibration photo
+├── Background.png                         # output of pipeline.py
+├── Background_mask.png                    # output of pipeline.py
+├── theta_opt.txt                          # saved camera parameters
+├── exp/                                   # raw experiment photos
 │   └── config_00.png ~ config_16.png
 ├── config/
-│   ├── config_00.png ~ config_08.png    # Simulation reference snapshots
-│   ├── gray/                            # Grayscale frames for flow extraction
+│   ├── config_00.png ~ config_08.png      # simulation reference snapshots
+│   ├── gray/                              # grayscale frames for flow extraction
 │   │   ├── camera_params.xml
 │   │   ├── settings.xml
 │   │   ├── config_01.png ~ config_08.png
 │   │   ├── flow_distances.csv
 │   │   └── flow_distances.json
-│   └── gray2/                           # Second camera angle
+│   └── gray2/                             # second camera angle
 │       ├── camera_params.xml
 │       ├── settings.xml
 │       ├── config_01.png ~ config_08.png
@@ -188,14 +186,14 @@ Real experiment
 
 ### FlowCurve
 
-All commands run from `FlowCurve/`.
+> `flowcurve.py` uses `from param import Param` and **must be run from `FlowCurve/`**.
+> `hb_fit.py` has no relative imports and can also be run from the project root.
 
 #### `hb_fit.py` — Herschel-Bulkley curve fitting
 
-Fits σ = K · γ̇ⁿ + σ_Y to Anton Paar rheometer CSV data and prints K, n, σ_Y with ±error and R².
+Fits σ = K · γ̇ⁿ + σ_Y to Anton Paar rheometer CSV data. Prints K, n, σ_Y with ±error and R².
 
 ```bash
-cd FlowCurve
 python3 hb_fit.py --file <CSV> [--range START END]
 ```
 
@@ -207,11 +205,16 @@ python3 hb_fit.py --file <CSV> [--range START END]
 **Examples:**
 ```bash
 cd FlowCurve
-
 python3 hb_fit.py --file Rheo_Data/tonkatsu_20230113_2000_23C.csv
+```
 
+```bash
+cd FlowCurve
 python3 hb_fit.py --file Rheo_Data/Lotion_20230114_1204_23C.csv --range 3 18
+```
 
+```bash
+cd FlowCurve
 python3 hb_fit.py --file Rheo_Data/Chuno_20230114_1458_23C.csv
 ```
 
@@ -219,10 +222,9 @@ python3 hb_fit.py --file Rheo_Data/Chuno_20230114_1458_23C.csv
 
 #### `flowcurve.py` — Flow curve visualization
 
-Plots experimental data with one or more HB model overlays.
+Plots experimental data with HB model overlays.
 
 ```bash
-cd FlowCurve
 python3 flowcurve.py \
     --file <CSV> \
     --est η n σ_Y [--est η n σ_Y ...] \
@@ -233,30 +235,32 @@ python3 flowcurve.py \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--file` | required | Rheometer CSV file |
-| `--est η n σ_Y` | required | HB parameters (repeat for multiple curves) |
+| `--est η n σ_Y` | required | HB parameters — repeat for multiple curves |
 | `--out` | required | Output PDF path |
 | `--extent_y Y_MIN Y_MAX` | `1e0 1e2` | Y-axis range |
 
 **Examples:**
 ```bash
 cd FlowCurve
-
-# Tonkatsu: ground truth vs optimizer estimate
 python3 flowcurve.py \
     --file Rheo_Data/tonkatsu_20230113_2000_23C.csv \
     --est 208.35 0.306 95.26 \
     --est 46.314 0.636 128.527 \
     --out figs/Tonkatsu.pdf
+```
 
-# Lotion: two estimates
+```bash
+cd FlowCurve
 python3 flowcurve.py \
     --file Rheo_Data/Lotion_20230114_1204_23C.csv \
     --est 2.711 0.6537 8.404 \
     --est 2.929 0.621 8.393 \
     --out figs/lotion.pdf \
     --extent_y 1 200
+```
 
-# Chuno (sweet bean paste)
+```bash
+cd FlowCurve
 python3 flowcurve.py \
     --file Rheo_Data/Chuno_20230114_1458_23C.csv \
     --est 59.220 0.851 83.073 \
@@ -268,15 +272,15 @@ python3 flowcurve.py \
 
 ### Calibration
 
-All commands run from `Calibration/`.
+> `pipeline.py` and `extract_flow_distance.py` have no relative imports.
+> All paths below are relative to the project root `New_ViRheometry/`.
 
 #### `pipeline.py` — Camera calibration
 
-ChArUco board calibration → DLT fine-tuning. Outputs `camera_params.xml`, `Background.png`, `Background_mask.png` into the same directory as `--calib_img`.
+ChArUco board calibration → DLT fine-tuning. Outputs `camera_params.xml`, `Background.png`, `Background_mask.png` next to `--calib_img`.
 
 ```bash
-cd Calibration
-python3 pipeline.py \
+python3 Calibration/pipeline.py \
     --calib_img <IMG> \
     --target <config_00.png> \
     [--bg_img <IMG>] \
@@ -295,42 +299,43 @@ python3 pipeline.py \
 
 **Examples:**
 ```bash
-cd Calibration
-
 # Okonomiyaki
-python3 pipeline.py \
-    --calib_img ../data/ref_Okonomi_4.6_6.3_1/IMG_7806.JPG \
-    --target    ../data/ref_Okonomi_4.6_6.3_1/config/config_00.png
-
-# Tonkatsu (5.5 x 2.3)
-python3 pipeline.py \
-    --calib_img ../data/ref_Tonkatsu_5.5_2.3_1/IMG_7799.JPG \
-    --target    ../data/ref_Tonkatsu_5.5_2.3_1/config/config_00.png
-
-# Skip ChArUco using saved theta
-python3 pipeline.py \
-    --calib_img ../data/ref_Tonkatsu_6.7_3.5_1/IMG_7796.JPG \
-    --target    ../data/ref_Tonkatsu_6.7_3.5_1/config/config_00.png \
-    --skip_calib \
-    --theta0 "$(cat ../data/ref_Tonkatsu_6.7_3.5_1/theta_opt.txt)"
+python3 Calibration/pipeline.py \
+    --calib_img data/ref_Okonomi_4.6_6.3_1/IMG_7806.JPG \
+    --target    data/ref_Okonomi_4.6_6.3_1/config/config_00.png
 ```
 
-> **Note:** The directory of `--calib_img` must contain `settings.xml` with `<setup W="..." H="..."/>`.
+```bash
+# Tonkatsu (5.5 x 2.3)
+python3 Calibration/pipeline.py \
+    --calib_img data/ref_Tonkatsu_5.5_2.3_1/IMG_7799.JPG \
+    --target    data/ref_Tonkatsu_5.5_2.3_1/config/config_00.png
+```
+
+```bash
+# Skip ChArUco using saved theta
+python3 Calibration/pipeline.py \
+    --calib_img data/ref_Tonkatsu_6.7_3.5_1/IMG_7796.JPG \
+    --target    data/ref_Tonkatsu_6.7_3.5_1/config/config_00.png \
+    --skip_calib \
+    --theta0 "$(cat data/ref_Tonkatsu_6.7_3.5_1/theta_opt.txt)"
+```
+
+> The directory of `--calib_img` must contain `settings.xml` with `<setup W="..." H="..."/>`.
 
 ---
 
 #### `extract_flow_distance.py` — Extract flow distances
 
-Processes `config_01.png ~ config_08.png` to measure flow front positions per frame. Outputs `flow_distances.csv` and `flow_distances.json`. Use `--print-dis1` to get the `-dis1` string ready for copy-paste into the optimizer.
+Processes `config_01.png ~ config_08.png` to measure flow front positions. Use `--print-dis1` to get the `-dis1` string ready for the optimizer.
 
 ```bash
-cd Calibration
-python3 extract_flow_distance.py --dir <DIR> [options]
+python3 Calibration/extract_flow_distance.py --dir <DIR> [options]
 ```
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--dir` | required | Directory with `config_*.png`, `settings.xml`, `camera_params.xml` |
+| `--dir` | required | Directory containing `config_*.png`, `settings.xml`, `camera_params.xml` |
 | `--settings` | auto | Override `settings.xml` path |
 | `--camera-xml` | auto | Override `camera_params.xml` path |
 | `--images` | `config_*.png` | Override image glob pattern |
@@ -350,25 +355,27 @@ python3 extract_flow_distance.py --dir <DIR> [options]
 
 **Examples:**
 ```bash
-cd Calibration
-
 # Tonkatsu 6.7x3.5 — first camera angle (gray/)
-python3 extract_flow_distance.py \
-    --dir ../data/ref_Tonkatsu_6.7_3.5_1/config/gray \
+python3 Calibration/extract_flow_distance.py \
+    --dir data/ref_Tonkatsu_6.7_3.5_1/config/gray \
     --monotonic --unit cm --print-dis1
 # → -dis1 1.4616 3.5214 5.6031 7.2681 8.3256 8.9129 9.2239 9.3288
+```
 
+```bash
 # Tonkatsu 6.7x3.5 — second camera angle (gray2/)
-python3 extract_flow_distance.py \
-    --dir ../data/ref_Tonkatsu_6.7_3.5_1/config/gray2 \
+python3 Calibration/extract_flow_distance.py \
+    --dir data/ref_Tonkatsu_6.7_3.5_1/config/gray2 \
     --monotonic --unit cm --print-dis1
 # → -dis1 1.1970 3.7921 6.4270 8.5508 9.6890 10.1595 10.4018 10.5528
+```
 
-# With debug images to inspect binarization
-python3 extract_flow_distance.py \
-    --dir ../data/ref_Okonomi_4.6_6.3_1/config \
+```bash
+# With debug images
+python3 Calibration/extract_flow_distance.py \
+    --dir data/ref_Okonomi_4.6_6.3_1/config \
     --foreground black --monotonic \
-    --debug-dir ../data/ref_Okonomi_4.6_6.3_1/debug \
+    --debug-dir data/ref_Okonomi_4.6_6.3_1/debug \
     --print-dis1
 ```
 
@@ -376,14 +383,13 @@ python3 extract_flow_distance.py \
 
 ### Simulation
 
-All commands run from `Simulation/`.
+> `main.py` uses `from config.config`, `from simulation.taichi`, and `from scripts` — **must be run from `Simulation/`**.
 
 #### `main.py` — Run MPM simulation and compare with reference
 
-Runs one MPM simulation, renders PNG snapshots, and generates pixel-level diff images against the reference experiment.
+Runs one MPM simulation, renders PNG snapshots, and generates pixel-level diff images.
 
 ```bash
-cd Simulation
 python3 main.py \
     --eta <η> --n <n> --sigma_y <σ_y> \
     --ref <REF_DIR> \
@@ -398,7 +404,7 @@ python3 main.py \
 | `--ref` | required | Path to reference data directory |
 | `--diff_amplify` | `5.0` | Brightness amplification for diff images |
 
-**Output** saved to `results/run_YYYYMMDD_HHMMSS/`:
+**Output** saved to `Simulation/results/run_YYYYMMDD_HHMMSS/`:
 ```
 results/run_20260409_153000/
 ├── simulation_results.csv
@@ -411,22 +417,24 @@ results/run_20260409_153000/
 **Examples:**
 ```bash
 cd Simulation
-
-# Tonkatsu (6.7 x 3.5) — optimizer result
 python3 main.py \
     --eta 4.537544237132824 \
     --n 0.9999980659350599 \
     --sigma_y 1.007011462027015 \
     --ref ../data/ref_Tonkatsu_6.7_3.5_1
+```
 
-# Tonkatsu (5.5 x 2.3) — optimizer result
+```bash
+cd Simulation
 python3 main.py \
     --eta 3.808008883317525 \
     --n 0.9839671447200721 \
     --sigma_y 1.007119796275376 \
     --ref ../data/ref_Tonkatsu_5.5_2.3_1
+```
 
-# Amplified diff for detailed comparison
+```bash
+cd Simulation
 python3 main.py \
     --eta 4.537 --n 0.9999 --sigma_y 1.007 \
     --ref ../data/ref_Tonkatsu_6.7_3.5_1 \
@@ -438,7 +446,6 @@ python3 main.py \
 #### `test.py` — Model inference test
 
 ```bash
-cd Simulation
 python3 test.py <MODEL_PATH> [--test-data <CSV>] [--single-sample] [--batch-size N] [--visualize]
 ```
 
@@ -453,9 +460,11 @@ python3 test.py <MODEL_PATH> [--test-data <CSV>] [--single-sample] [--batch-size
 **Examples:**
 ```bash
 cd Simulation
-
 python3 test.py model/best_model.joblib --single-sample
+```
 
+```bash
+cd Simulation
 python3 test.py model/best_model.joblib --batch-size 20 --visualize
 ```
 
@@ -463,12 +472,11 @@ python3 test.py model/best_model.joblib --batch-size 20 --visualize
 
 ### Optimization
 
-All commands run from `Optimization/`.
+> `optimize_1setup.py` and `optimize_2setups.py` use `from libs.xxx` — **must be run from `Optimization/`**.
 
 #### `propose_initial_setup.py` — Generate initial setup proposal
 
 ```bash
-cd Optimization
 python3 propose_initial_setup.py [--min-mm N] [--max-mm N] [--out FILE]
 ```
 
@@ -487,8 +495,9 @@ python3 propose_initial_setup.py --min-mm 20 --max-mm 60 --out my_setup1.txt
 
 #### `optimize_1setup.py` — CMA-ES optimization (1 setup)
 
+Estimates (η, n, σ_y) from a **single** dam-break experiment.
+
 ```bash
-cd Optimization
 python3 optimize_1setup.py \
     -W1 <W> -H1 <H> \
     -dis1 d1 d2 d3 d4 d5 d6 d7 d8 \
@@ -516,34 +525,42 @@ python3 optimize_1setup.py \
 | `--seed` | `42` | Random seed |
 | `--compare_strategies` | — | Run all strategies and compare |
 
-**Output** saved to `result_setup1_<strategy>_<threshold>_<timestamp>/`.
+**Output** saved to `Optimization/result_setup1_<strategy>_<threshold>_<timestamp>/`.
 
 **Examples:**
 ```bash
-cd Optimization
-
 # Tonkatsu 6.7x3.5 (gray/) — Top-2 experts
+cd Optimization
 python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
     -W1 3.5 -H1 6.7 \
     -dis1 1.4616 3.5214 5.6031 7.2681 8.3256 8.9129 9.2239 9.3288 \
     --strategy topk --topk 2
+```
 
+```bash
 # Tonkatsu 6.7x3.5 (gray/) — Adaptive gating
+cd Optimization
 python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
     -W1 3.5 -H1 6.7 \
     -dis1 1.4616 3.5214 5.6031 7.2681 8.3256 8.9129 9.2239 9.3288 \
     --strategy adaptive --confidence_threshold 0.7
+```
 
+```bash
 # Tonkatsu 6.7x3.5 (gray/) — Threshold strategy
+cd Optimization
 python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
     -W1 3.5 -H1 6.7 \
     -dis1 1.4616 3.5214 5.6031 7.2681 8.3256 8.9129 9.2239 9.3288 \
     --strategy threshold --threshold 0.01 --max_experts 5
+```
 
+```bash
 # Compare all strategies at once
+cd Optimization
 python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
     -W1 3.5 -H1 6.7 \
@@ -555,8 +572,9 @@ python3 optimize_1setup.py \
 
 #### `optimize_2setups.py` — CMA-ES optimization (2 setups)
 
+Estimates (η, n, σ_y) from **two** dam-break experiments simultaneously.
+
 ```bash
-cd Optimization
 python3 optimize_2setups.py \
     -W1 <W> -H1 <H> -dis1 d1..d8 \
     -W2 <W> -H2 <H> -dis2 d1..d8 \
@@ -577,9 +595,8 @@ Additional arguments:
 
 **Examples:**
 ```bash
+# Tonkatsu 6.7x3.5: gray/ as setup1, gray2/ as setup2 — Top-2
 cd Optimization
-
-# Tonkatsu 6.7x3.5: gray/ as setup1, gray2/ as setup2
 python3 optimize_2setups.py \
     --moe_dir moe_workspace5 \
     -W1 3.5 -H1 6.7 \
@@ -587,8 +604,11 @@ python3 optimize_2setups.py \
     -W2 3.5 -H2 6.7 \
     -dis2 1.1970 3.7921 6.4270 8.5508 9.6890 10.1595 10.4018 10.5528 \
     --strategy topk --topk 2
+```
 
+```bash
 # Adaptive gating
+cd Optimization
 python3 optimize_2setups.py \
     --moe_dir moe_workspace5 \
     -W1 3.5 -H1 6.7 \
@@ -596,8 +616,11 @@ python3 optimize_2setups.py \
     -W2 3.5 -H2 6.7 \
     -dis2 1.1970 3.7921 6.4270 8.5508 9.6890 10.1595 10.4018 10.5528 \
     --strategy adaptive --confidence_threshold 0.9
+```
 
-# Reuse completed Setup 1 result
+```bash
+# Reuse a completed Setup 1 result
+cd Optimization
 python3 optimize_2setups.py \
     --setup1_dir result_setup1_adaptive_0.01_20260203_231654 \
     --moe_dir moe_workspace5 \
@@ -612,12 +635,12 @@ python3 optimize_2setups.py \
 
 #### `test_boundary_comparison.py` — Boundary region test
 
-No arguments. Tests Hard-TopK vs Soft-GMM at expert region boundaries using `moe_workspace5`.
+No arguments. Uses `moe_workspace5` directly.
 
 ```bash
 cd Optimization
 python3 test_boundary_comparison.py
-# Results saved to: boundary_comparison_results/
+# Results saved to: Optimization/boundary_comparison_results/
 ```
 
 ---
@@ -626,12 +649,22 @@ python3 test_boundary_comparison.py
 
 Not standalone scripts. Imported automatically by `optimize_1setup.py` and `optimize_2setups.py`.
 
-- `soft_interpolate.py` — GMM-based soft expert weighting
-- `visualize_comparison.py` — comparison plots when `--compare_strategies` is used
-
 ---
 
 ## Notes
+
+### Which directory to run from
+
+| Script | Run from |
+|--------|----------|
+| `FlowCurve/flowcurve.py` | `FlowCurve/` (has `from param import`) |
+| `FlowCurve/hb_fit.py` | anywhere |
+| `Calibration/pipeline.py` | anywhere |
+| `Calibration/extract_flow_distance.py` | anywhere |
+| `Simulation/main.py` | `Simulation/` (has `from config.config`, `from simulation.taichi`) |
+| `Simulation/test.py` | `Simulation/` |
+| `Optimization/optimize_*.py` | `Optimization/` (has `from libs.xxx`) |
+| `Optimization/propose_initial_setup.py` | `Optimization/` |
 
 ### HB parameter units
 
@@ -656,7 +689,7 @@ Example: `ref_Tonkatsu_6.7_3.5_1` → Tonkatsu sauce, H = 6.7 cm, W = 3.5 cm, tr
 
 ### `lcmaes` (non-critical)
 
-Used only by `libs/cmaes.py` (legacy). The main scripts `optimize_1setup.py` and `optimize_2setups.py` use `import cma` (pycma) and work without lcmaes.
+Used only by `libs/cmaes.py` (legacy). `optimize_1setup.py` and `optimize_2setups.py` use `import cma` (pycma) and work without lcmaes.
 
 ### Taichi GPU / CPU
 
