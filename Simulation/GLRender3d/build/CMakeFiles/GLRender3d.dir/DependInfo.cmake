@@ -8,9 +8,9 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp" "CMakeFiles/GLRender3d.dir/FluidMat.cpp.o" "gcc" "CMakeFiles/GLRender3d.dir/FluidMat.cpp.o.d"
-  "/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp" "CMakeFiles/GLRender3d.dir/ObjGL.cpp.o" "gcc" "CMakeFiles/GLRender3d.dir/ObjGL.cpp.o.d"
-  "/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/main.cpp" "CMakeFiles/GLRender3d.dir/main.cpp.o" "gcc" "CMakeFiles/GLRender3d.dir/main.cpp.o.d"
+  "/Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp" "CMakeFiles/GLRender3d.dir/FluidMat.cpp.o" "gcc" "CMakeFiles/GLRender3d.dir/FluidMat.cpp.o.d"
+  "/Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp" "CMakeFiles/GLRender3d.dir/ObjGL.cpp.o" "gcc" "CMakeFiles/GLRender3d.dir/ObjGL.cpp.o.d"
+  "/Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/main.cpp" "CMakeFiles/GLRender3d.dir/main.cpp.o" "gcc" "CMakeFiles/GLRender3d.dir/main.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

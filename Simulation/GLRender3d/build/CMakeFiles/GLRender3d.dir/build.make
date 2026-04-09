@@ -53,10 +53,10 @@ RM = /opt/homebrew/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d
+CMAKE_SOURCE_DIR = /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build
+CMAKE_BINARY_DIR = /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/GLRender3d.dir/depend.make
@@ -73,46 +73,46 @@ CMakeFiles/GLRender3d.dir/codegen:
 .PHONY : CMakeFiles/GLRender3d.dir/codegen
 
 CMakeFiles/GLRender3d.dir/main.cpp.o: CMakeFiles/GLRender3d.dir/flags.make
-CMakeFiles/GLRender3d.dir/main.cpp.o: /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/main.cpp
+CMakeFiles/GLRender3d.dir/main.cpp.o: /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/main.cpp
 CMakeFiles/GLRender3d.dir/main.cpp.o: CMakeFiles/GLRender3d.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/GLRender3d.dir/main.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/GLRender3d.dir/main.cpp.o -MF CMakeFiles/GLRender3d.dir/main.cpp.o.d -o CMakeFiles/GLRender3d.dir/main.cpp.o -c /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/main.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/GLRender3d.dir/main.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/GLRender3d.dir/main.cpp.o -MF CMakeFiles/GLRender3d.dir/main.cpp.o.d -o CMakeFiles/GLRender3d.dir/main.cpp.o -c /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/main.cpp
 
 CMakeFiles/GLRender3d.dir/main.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/GLRender3d.dir/main.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/main.cpp > CMakeFiles/GLRender3d.dir/main.cpp.i
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/main.cpp > CMakeFiles/GLRender3d.dir/main.cpp.i
 
 CMakeFiles/GLRender3d.dir/main.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/GLRender3d.dir/main.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/main.cpp -o CMakeFiles/GLRender3d.dir/main.cpp.s
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/main.cpp -o CMakeFiles/GLRender3d.dir/main.cpp.s
 
 CMakeFiles/GLRender3d.dir/ObjGL.cpp.o: CMakeFiles/GLRender3d.dir/flags.make
-CMakeFiles/GLRender3d.dir/ObjGL.cpp.o: /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp
+CMakeFiles/GLRender3d.dir/ObjGL.cpp.o: /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp
 CMakeFiles/GLRender3d.dir/ObjGL.cpp.o: CMakeFiles/GLRender3d.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/GLRender3d.dir/ObjGL.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/GLRender3d.dir/ObjGL.cpp.o -MF CMakeFiles/GLRender3d.dir/ObjGL.cpp.o.d -o CMakeFiles/GLRender3d.dir/ObjGL.cpp.o -c /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/GLRender3d.dir/ObjGL.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/GLRender3d.dir/ObjGL.cpp.o -MF CMakeFiles/GLRender3d.dir/ObjGL.cpp.o.d -o CMakeFiles/GLRender3d.dir/ObjGL.cpp.o -c /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp
 
 CMakeFiles/GLRender3d.dir/ObjGL.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/GLRender3d.dir/ObjGL.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp > CMakeFiles/GLRender3d.dir/ObjGL.cpp.i
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp > CMakeFiles/GLRender3d.dir/ObjGL.cpp.i
 
 CMakeFiles/GLRender3d.dir/ObjGL.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/GLRender3d.dir/ObjGL.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp -o CMakeFiles/GLRender3d.dir/ObjGL.cpp.s
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/ObjGL.cpp -o CMakeFiles/GLRender3d.dir/ObjGL.cpp.s
 
 CMakeFiles/GLRender3d.dir/FluidMat.cpp.o: CMakeFiles/GLRender3d.dir/flags.make
-CMakeFiles/GLRender3d.dir/FluidMat.cpp.o: /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp
+CMakeFiles/GLRender3d.dir/FluidMat.cpp.o: /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp
 CMakeFiles/GLRender3d.dir/FluidMat.cpp.o: CMakeFiles/GLRender3d.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/GLRender3d.dir/FluidMat.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/GLRender3d.dir/FluidMat.cpp.o -MF CMakeFiles/GLRender3d.dir/FluidMat.cpp.o.d -o CMakeFiles/GLRender3d.dir/FluidMat.cpp.o -c /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/GLRender3d.dir/FluidMat.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/GLRender3d.dir/FluidMat.cpp.o -MF CMakeFiles/GLRender3d.dir/FluidMat.cpp.o.d -o CMakeFiles/GLRender3d.dir/FluidMat.cpp.o -c /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp
 
 CMakeFiles/GLRender3d.dir/FluidMat.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/GLRender3d.dir/FluidMat.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp > CMakeFiles/GLRender3d.dir/FluidMat.cpp.i
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp > CMakeFiles/GLRender3d.dir/FluidMat.cpp.i
 
 CMakeFiles/GLRender3d.dir/FluidMat.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/GLRender3d.dir/FluidMat.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp -o CMakeFiles/GLRender3d.dir/FluidMat.cpp.s
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp -o CMakeFiles/GLRender3d.dir/FluidMat.cpp.s
 
 # Object files for target GLRender3d
 GLRender3d_OBJECTS = \
@@ -184,7 +184,7 @@ GLRender3d: /opt/homebrew/lib/libopencv_photo.4.13.0.dylib
 GLRender3d: /opt/homebrew/lib/libopencv_imgproc.4.13.0.dylib
 GLRender3d: /opt/homebrew/lib/libopencv_core.4.13.0.dylib
 GLRender3d: CMakeFiles/GLRender3d.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Linking CXX executable GLRender3d"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Linking CXX executable GLRender3d"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/GLRender3d.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.
@@ -196,6 +196,6 @@ CMakeFiles/GLRender3d.dir/clean:
 .PHONY : CMakeFiles/GLRender3d.dir/clean
 
 CMakeFiles/GLRender3d.dir/depend:
-	cd /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles/GLRender3d.dir/DependInfo.cmake "--color=$(COLOR)" GLRender3d
+	cd /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build/CMakeFiles/GLRender3d.dir/DependInfo.cmake "--color=$(COLOR)" GLRender3d
 .PHONY : CMakeFiles/GLRender3d.dir/depend
 

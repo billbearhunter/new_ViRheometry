@@ -1,5 +1,5 @@
 CMakeFiles/cpp_marching_cubes.dir/MarchingCubes.cpp.o: \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/MarchingCubes.cpp \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/MarchingCubes.cpp \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/memory \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__assert \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config \
@@ -493,7 +493,7 @@ CMakeFiles/cpp_marching_cubes.dir/MarchingCubes.cpp.o: \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_seek_set.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_ctermid.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_off_t.h \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/MarchingCubes.h \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/MarchingCubes.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/cassert \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/assert.h \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/LookUpTable.h
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/LookUpTable.h

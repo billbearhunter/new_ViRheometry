@@ -1,6 +1,6 @@
 CMakeFiles/GLRender3d.dir/FluidMat.cpp.o: \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/FluidMat.h \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/FluidMat.cpp \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/FluidMat.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/stdio.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config_site \
@@ -1019,7 +1019,7 @@ CMakeFiles/GLRender3d.dir/FluidMat.cpp.o: \
   /opt/homebrew/Cellar/opencv/4.13.0_3/include/opencv4/opencv2/video.hpp \
   /opt/homebrew/Cellar/opencv/4.13.0_3/include/opencv4/opencv2/video/tracking.hpp \
   /opt/homebrew/Cellar/opencv/4.13.0_3/include/opencv4/opencv2/video/background_segm.hpp \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/main.h \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/main.h \
   /opt/homebrew/include/eigen3/Eigen/Core \
   /opt/homebrew/include/eigen3/Eigen/Version \
   /opt/homebrew/include/eigen3/Eigen/src/Core/util/DisableStupidWarnings.h \

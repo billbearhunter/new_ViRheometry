@@ -1,6 +1,6 @@
 CMakeFiles/GLRender3d.dir/main.cpp.o: \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/main.cpp \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/main.h \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/main.cpp \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/main.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/stdio.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__config_site \
@@ -1097,8 +1097,8 @@ CMakeFiles/GLRender3d.dir/main.cpp.o: \
   /opt/homebrew/include/eigen3/Eigen/src/Eigenvalues/GeneralizedEigenSolver.h \
   /opt/homebrew/include/eigen3/Eigen/src/Eigenvalues/./RealQZ.h \
   /opt/homebrew/include/eigen3/Eigen/src/Eigenvalues/MatrixBaseEigenvalues.h \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/ObjGL.h \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/GLRender3d/FluidMat.h \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/ObjGL.h \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/FluidMat.h \
   /opt/homebrew/Cellar/opencv/4.13.0_3/include/opencv4/opencv2/opencv.hpp \
   /opt/homebrew/Cellar/opencv/4.13.0_3/include/opencv4/opencv2/opencv_modules.hpp \
   /opt/homebrew/Cellar/opencv/4.13.0_3/include/opencv4/opencv2/core.hpp \

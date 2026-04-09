@@ -1,5 +1,5 @@
 CMakeFiles/cpp_marching_cubes.dir/main.cpp.o: \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/main.cpp \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/main.cpp \
   /opt/homebrew/include/eigen3/Eigen/Dense \
   /opt/homebrew/include/eigen3/Eigen/Core \
   /opt/homebrew/include/eigen3/Eigen/Version \
@@ -1117,6 +1117,6 @@ CMakeFiles/cpp_marching_cubes.dir/main.cpp.o: \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__filesystem/path_iterator.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__filesystem/recursive_directory_iterator.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__filesystem/u8path.h \
-  /Users/cglab/Desktop/SIGGRAPH2026_ASIA/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/MarchingCubes.h \
+  /Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/MarchingCubes.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/cassert \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/assert.h
