@@ -158,7 +158,7 @@ Real experiment
 Fits σ = K · γ̇ⁿ + σ_Y to Anton Paar rheometer CSV data.
 
 ```bash
-python hb_fit.py --file <CSV> [--range START END]
+python3 hb_fit.py --file <CSV> [--range START END]
 ```
 
 | Argument | Default | Description |
@@ -168,8 +168,8 @@ python hb_fit.py --file <CSV> [--range START END]
 
 **Example:**
 ```bash
-python hb_fit.py --file Rheo_Data/tonkatsu_20230113_2000_23C.csv
-python hb_fit.py --file Rheo_Data/Lotion_20230114_1204_23C.csv --range 3 18
+python3 hb_fit.py --file Rheo_Data/tonkatsu_20230113_2000_23C.csv
+python3 hb_fit.py --file Rheo_Data/Lotion_20230114_1204_23C.csv --range 3 18
 ```
 
 **Output:** Prints K, n, σ_Y with ±error and R² to stdout.
@@ -181,7 +181,7 @@ python hb_fit.py --file Rheo_Data/Lotion_20230114_1204_23C.csv --range 3 18
 Plots experimental data with one or more HB model overlays.
 
 ```bash
-python flowcurve.py --file <CSV> --est η n σ_Y [--est η n σ_Y ...] --out <PDF> [--extent_y Y_MIN Y_MAX]
+python3 flowcurve.py --file <CSV> --est η n σ_Y [--est η n σ_Y ...] --out <PDF> [--extent_y Y_MIN Y_MAX]
 ```
 
 | Argument | Default | Description |
@@ -194,13 +194,13 @@ python flowcurve.py --file <CSV> --est η n σ_Y [--est η n σ_Y ...] --out <PD
 **Example:**
 ```bash
 # Single estimated curve
-python flowcurve.py \
+python3 flowcurve.py \
     --file Rheo_Data/tonkatsu_20230113_2000_23C.csv \
     --est 208.35 0.306 95.26 \
     --out figs/Tonkatsu.pdf
 
 # Ground truth vs two estimates
-python flowcurve.py \
+python3 flowcurve.py \
     --file Rheo_Data/Lotion_20230114_1204_23C.csv \
     --est 2.711 0.6537 8.404 \
     --est 2.929 0.621 8.393 \
@@ -217,7 +217,7 @@ python flowcurve.py \
 Full pipeline: ChArUco board calibration → DLT fine-tuning → outputs `camera_params.xml` and background mask images.
 
 ```bash
-python pipeline.py \
+python3 pipeline.py \
     --calib_img <IMG> \
     --target <config_00.png> \
     [--bg_img <IMG>] \
@@ -242,7 +242,7 @@ python pipeline.py \
 **Example:**
 ```bash
 cd Calibration
-python pipeline.py \
+python3 pipeline.py \
     --calib_img ../data/ref_Tonkatsu_6.7_3.5_1/IMG_7806.JPG \
     --target    ../data/ref_Tonkatsu_6.7_3.5_1/config_00.png
 ```
@@ -259,7 +259,7 @@ python pipeline.py \
 Processes a series of `config_XX.png` images to extract the flow front position at each time step. Outputs a CSV/JSON of 8 flow distance values used as input to CMA-ES.
 
 ```bash
-python extract_flow_distance.py --dir <DATA_DIR> [options]
+python3 extract_flow_distance.py --dir <DATA_DIR> [options]
 ```
 
 | Argument | Default | Description |
@@ -285,7 +285,7 @@ python extract_flow_distance.py --dir <DATA_DIR> [options]
 **Example:**
 ```bash
 cd Calibration
-python extract_flow_distance.py \
+python3 extract_flow_distance.py \
     --dir ../data/ref_Tonkatsu_6.7_3.5_1 \
     --foreground black \
     --monotonic \
@@ -309,7 +309,7 @@ Runs one MPM simulation with given HB parameters, renders PNG snapshots, and gen
 
 ```bash
 cd Simulation
-python main.py \
+python3 main.py \
     --eta <η> --n <n> --sigma_y <σ_y> \
     --ref <REF_DIR> \
     [--diff_amplify 5.0]
@@ -337,12 +337,12 @@ run_20260409_153000/
 ```bash
 cd Simulation
 # From optimizer result
-python main.py \
+python3 main.py \
     --eta 4.537 --n 0.9999 --sigma_y 1.007 \
     --ref ../data/ref_Tonkatsu_6.7_3.5_1
 
 # Ground truth verification
-python main.py \
+python3 main.py \
     --eta 208.35 --n 0.306 --sigma_y 95.26 \
     --ref ../data/ref_Tonkatsu_6.7_3.5_1 \
     --diff_amplify 10.0
@@ -356,7 +356,7 @@ Tests the pre-trained flow distance prediction model (`model/best_model.joblib`)
 
 ```bash
 cd Simulation
-python test.py <MODEL_PATH> [--test-data <CSV>] [--single-sample] [--batch-size N] [--visualize]
+python3 test.py <MODEL_PATH> [--test-data <CSV>] [--single-sample] [--batch-size N] [--visualize]
 ```
 
 | Argument | Default | Description |
@@ -370,8 +370,8 @@ python test.py <MODEL_PATH> [--test-data <CSV>] [--single-sample] [--batch-size 
 **Example:**
 ```bash
 cd Simulation
-python test.py model/best_model.joblib --single-sample
-python test.py model/best_model.joblib --test-data data/test_samples.csv --visualize
+python3 test.py model/best_model.joblib --single-sample
+python3 test.py model/best_model.joblib --test-data data/test_samples.csv --visualize
 ```
 
 ---
@@ -384,7 +384,7 @@ Randomly proposes geometry parameters (W, H) and physical parameters for the fir
 
 ```bash
 cd Optimization
-python propose_initial_setup.py [--min-mm N] [--max-mm N] [--out FILE]
+python3 propose_initial_setup.py [--min-mm N] [--max-mm N] [--out FILE]
 ```
 
 | Argument | Default | Description |
@@ -396,7 +396,7 @@ python propose_initial_setup.py [--min-mm N] [--max-mm N] [--out FILE]
 **Example:**
 ```bash
 cd Optimization
-python propose_initial_setup.py --min-mm 20 --max-mm 60 --out my_setup.txt
+python3 propose_initial_setup.py --min-mm 20 --max-mm 60 --out my_setup.txt
 ```
 
 ---
@@ -407,7 +407,7 @@ Estimates (η, n, σ_y) from a **single** dam-break experiment using CMA-ES with
 
 ```bash
 cd Optimization
-python optimize_1setup.py \
+python3 optimize_1setup.py \
     -W1 <W> -H1 <H> \
     -dis1 d1 d2 d3 d4 d5 d6 d7 d8 \
     --moe_dir <DIR> \
@@ -444,21 +444,21 @@ python optimize_1setup.py \
 cd Optimization
 
 # Standard run (Top-2 experts)
-python optimize_1setup.py \
+python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
     -W1 2.0 -H1 3.5 \
     -dis1 0.409 1.010 1.421 1.617 1.730 1.816 1.890 1.954 \
     --strategy topk --topk 2
 
 # Adaptive gating
-python optimize_1setup.py \
+python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
     -W1 2.1 -H1 4.1 \
     -dis1 1.221 3.934 6.944 9.293 10.513 10.951 11.049 11.082 \
     --strategy adaptive --confidence_threshold 0.7
 
 # Compare all strategies at once
-python optimize_1setup.py \
+python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
     -W1 2.0 -H1 3.5 \
     -dis1 0.409 1.010 1.421 1.617 1.730 1.816 1.890 1.954 \
@@ -473,7 +473,7 @@ Estimates (η, n, σ_y) from **two** dam-break experiments simultaneously for hi
 
 ```bash
 cd Optimization
-python optimize_2setups.py \
+python3 optimize_2setups.py \
     -W1 <W> -H1 <H> -dis1 d1..d8 \
     -W2 <W> -H2 <H> -dis2 d1..d8 \
     --moe_dir <DIR> \
@@ -496,7 +496,7 @@ All arguments from `optimize_1setup.py` apply, plus:
 cd Optimization
 
 # 2-setup optimization (fresh run)
-python optimize_2setups.py \
+python3 optimize_2setups.py \
     --moe_dir moe_workspace5 \
     -W1 2.0 -H1 3.5 \
     -dis1 0.409 1.010 1.421 1.617 1.730 1.816 1.890 1.954 \
@@ -505,7 +505,7 @@ python optimize_2setups.py \
     --strategy topk --topk 2
 
 # Reuse existing Setup 1 result
-python optimize_2setups.py \
+python3 optimize_2setups.py \
     --setup1_dir result_setup1_adaptive_0.01_20260203_231654 \
     --moe_dir moe_workspace5 \
     -W1 2.0 -H1 3.5 \
@@ -523,7 +523,7 @@ Tests how Hard-TopK and Soft-GMM gating differ at the boundaries of expert regio
 
 ```bash
 cd Optimization
-python test_boundary_comparison.py
+python3 test_boundary_comparison.py
 ```
 
 Results are saved to `boundary_comparison_results/`.
