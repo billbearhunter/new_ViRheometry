@@ -5,29 +5,32 @@ Master entry point — runs the full data pipeline in sequence.
 
 Steps
 -----
-  collect   Step 1 – Run headless MPM simulations to collect training data
+  collect   Step 1 – Random headless MPM simulations to collect training data
   prepare   Step 2 – GMM clustering + stratified train/val/test split
   train     Step 3 – Train one GP expert per GMM cluster
   evaluate  Step 4 – Evaluate experts; print metrics table + optional plots
+  bo        Step 5 – BO-guided targeted collection for bad clusters, then retrain
 
-Usage examples
---------------
-# Full pipeline (skip collection, use existing CSV):
-python run_pipeline.py --csv workspace/data.csv --out workspace/moe_ws \\
-                       --steps prepare,train,evaluate
-
-# Add targeted hard-region data then retrain hard clusters only:
-python run_pipeline.py --steps collect,train \\
-                       --preset splashing --n-samples 2000 \\
-                       --out workspace/moe_ws --clusters 19 42 46 --force
-
-# Full pipeline from scratch (collect → prepare → train → evaluate):
+Typical full workflow
+---------------------
+# 1. Initial random collection + full pipeline:
 python run_pipeline.py --steps collect,prepare,train,evaluate \\
                        --n-samples 5000 --out workspace/moe_ws \\
-                       --csv workspace/data.csv
+                       --csv workspace/data.csv --out-csv workspace/metrics.csv
 
-# Evaluate only, generate plots:
+# 2. BO refinement on bad clusters (MaxErr > 1.0 cm), 200 pts each:
+python run_pipeline.py --steps bo \\
+                       --out workspace/moe_ws \\
+                       --metrics workspace/metrics.csv \\
+                       --maxerr-thresh 1.0 --n-per-cluster 200
+
+# 3. Re-evaluate after BO:
 python run_pipeline.py --steps evaluate --out workspace/moe_ws --plots
+
+# Or run everything in one shot (collect → prepare → train → evaluate → bo → evaluate):
+python run_pipeline.py --steps collect,prepare,train,evaluate,bo,evaluate \\
+                       --n-samples 5000 --out workspace/moe_ws \\
+                       --csv workspace/data.csv --out-csv workspace/metrics.csv
 """
 
 import argparse
@@ -109,12 +112,22 @@ def main():
     parser.add_argument("--plots",     action="store_true",
                         help="Generate parity plots during evaluation")
 
+    # bo_collect.py args
+    parser.add_argument("--metrics",        type=str, default=None,
+                        help="Metrics CSV from evaluate step (for auto bad-cluster detection)")
+    parser.add_argument("--maxerr-thresh",  type=float, default=1.0,
+                        help="MaxErr threshold (cm) to flag a cluster as bad (default: 1.0)")
+    parser.add_argument("--n-per-cluster",  type=int,   default=200,
+                        help="BO simulation points to collect per bad cluster (default: 200)")
+    parser.add_argument("--n-candidates",   type=int,   default=2000,
+                        help="BO candidate pool size per acquisition step (default: 2000)")
+
     args = parser.parse_args()
 
     out_dir = Path(args.out)
     steps   = [s.lower() for s in args.steps]
 
-    valid = {"collect", "prepare", "train", "evaluate"}
+    valid = {"collect", "prepare", "train", "evaluate", "bo"}
     bad   = set(steps) - valid
     if bad:
         parser.error(f"Unknown step(s): {bad}.  Valid: {valid}")
@@ -176,15 +189,47 @@ def main():
 
     # ── Step 4: evaluate ──────────────────────────────────────────────────────
     if "evaluate" in steps:
+        # Auto-set out-csv path so the bo step can find it
+        eval_out_csv = args.out_csv or str(out_dir / "metrics.csv")
+
         cmd = [py, str(HERE / "evaluate_experts.py"),
                "--data", str(out_dir),
-               "--mode", args.eval_mode]
-        if args.out_csv:
-            cmd += ["--out-csv", args.out_csv]
+               "--mode", args.eval_mode,
+               "--out-csv", eval_out_csv]
         if args.plots:
             cmd.append("--plots")
 
         _run(cmd, "evaluate")
+
+        # Make metrics available to a subsequent bo step
+        if args.metrics is None:
+            args.metrics = eval_out_csv
+
+    # ── Step 5: bo ────────────────────────────────────────────────────────────
+    if "bo" in steps:
+        metrics_path = args.metrics or str(out_dir / "metrics.csv")
+        if not Path(metrics_path).exists():
+            log.error(
+                f"Metrics CSV not found: {metrics_path}\n"
+                "Run the 'evaluate' step first, or pass --metrics <path>."
+            )
+            sys.exit(1)
+
+        cmd = [py, str(HERE / "bo_collect.py"),
+               "--data",          str(out_dir),
+               "--metrics",       metrics_path,
+               "--maxerr-thresh", str(args.maxerr_thresh),
+               "--n-per-cluster", str(args.n_per_cluster),
+               "--n-candidates",  str(args.n_candidates),
+               "--seed",          str(args.seed)]
+        if args.clusters:
+            cmd += ["--clusters"] + [str(c) for c in args.clusters]
+
+        _run(cmd, "bo")
+
+        # After BO merges data into cluster CSVs, retrain bad clusters
+        # bo_collect.py prints which clusters it targeted; re-train them
+        # (user can also run train_experts.py --clusters manually)
 
     log.info("\nPipeline complete.")
 
