@@ -98,15 +98,22 @@ def main():
     with open(rheo_json) as f:
         params = json.load(f)
 
-    eta     = params["eta"]
-    n       = params["n"]
-    sigma_y = params["sigma_y"]
+    # hb_fit.py outputs SI units (Pa). The simulation operates in CGS units
+    # (dyne/cm²), where 1 Pa = 10 dyne/cm². Multiply η and σ_y by 10.
+    eta_si     = params["eta"]
+    n          = params["n"]
+    sigma_y_si = params["sigma_y"]
+    eta        = eta_si * 10.0
+    sigma_y    = sigma_y_si * 10.0
 
-    print(f"\n[info] HB parameters from rheometer:")
-    print(f"         η      = {eta:.4f}  Pa·s^n")
+    print(f"\n[info] HB parameters from rheometer (SI):")
+    print(f"         η      = {eta_si:.4f}  Pa·s^n")
     print(f"         n      = {n:.4f}")
-    print(f"         σ_y    = {sigma_y:.4f}  Pa")
+    print(f"         σ_y    = {sigma_y_si:.4f}  Pa")
     print(f"         R²     = {params['r2']:.6f}")
+    print(f"\n[info] Converted to CGS for simulation (×10):")
+    print(f"         η      = {eta:.4f}  dyne·s/cm²")
+    print(f"         σ_y    = {sigma_y:.4f}  dyne/cm²")
 
     # Step 2: Run simulation with rheometer parameters
     print(f"\n{'='*60}")
