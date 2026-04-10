@@ -11,8 +11,9 @@ Steps:
   4. Render Background.png       -- directly with K, R, t
   5. Save camera_params.xml      -- theta conversion only here (XML format)
 
-All outputs are saved to the same directory as --calib_img.
-fluid_w / fluid_h are read automatically from settings.xml in the same folder.
+settings.xml is read from the directory of --calib_img (data dir).
+Outputs are saved to --out_dir (defaults to the same directory as --calib_img).
+fluid_w / fluid_h are read automatically from settings.xml in the data dir.
   <setup W="6.3" H="4.6" .../>
 
 Usage:
@@ -713,12 +714,13 @@ def main():
                         help="Output directory. Default: same directory as --calib_img")
     args = parser.parse_args()
 
-    out_dir = args.out_dir if args.out_dir else os.path.dirname(os.path.abspath(args.calib_img))
+    data_dir = os.path.dirname(os.path.abspath(args.calib_img))
+    out_dir = args.out_dir if args.out_dir else data_dir
     os.makedirs(out_dir, exist_ok=True)
 
-    settings_path = os.path.join(out_dir, "settings.xml")
+    settings_path = os.path.join(data_dir, "settings.xml")
     if not os.path.exists(settings_path):
-        sys.exit(f"[error] settings.xml not found in: {out_dir}")
+        sys.exit(f"[error] settings.xml not found in: {data_dir}")
     tree = ET.parse(settings_path)
     setup = tree.getroot().find("setup")
     if setup is None:
