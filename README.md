@@ -12,13 +12,14 @@
 2. [Installation](#installation)
 3. [Project Structure](#project-structure)
 4. [Data Directory Layout](#data-directory-layout)
-5. [Typical Workflow](#typical-workflow)
-6. [Module Reference](#module-reference)
+5. [Output Layout](#output-layout)
+6. [Typical Workflow](#typical-workflow)
+7. [Module Reference](#module-reference)
    - [FlowCurve](#flowcurve)
    - [Calibration](#calibration)
    - [Simulation](#simulation)
    - [Optimization](#optimization)
-7. [Notes](#notes)
+8. [Notes](#notes)
 
 ---
 
@@ -66,23 +67,28 @@ New_ViRheometry/
 ├── build.sh
 ├── requirements.txt
 │
-├── data/                                  # Experiment datasets
-│   ├── ref_Okonomi_4.6_6.3_1/            # Okonomiyaki sauce, H=4.6cm W=6.3cm
-│   ├── ref_Tonkatsu_5.5_2.3_1/           # Tonkatsu sauce,    H=5.5cm W=2.3cm
-│   └── ref_Tonkatsu_6.7_3.5_1/           # Tonkatsu sauce,    H=6.7cm W=3.5cm
+├── data/                                  # Raw experiment inputs (read-only)
+│   ├── ref_Okonomi_4.6_6.3_1/
+│   ├── ref_Tonkatsu_5.5_2.3_1/
+│   └── ref_Tonkatsu_6.7_3.5_1/
 │
 ├── FlowCurve/                             # ★ must cd here before running
 │   ├── flowcurve.py
 │   ├── hb_fit.py
 │   ├── param.py
-│   └── Rheo_Data/
+│   ├── Rheo_Data/
+│   └── figs/                             # ← output: PDF plots
 │
 ├── Calibration/
 │   ├── pipeline.py
-│   └── extract_flow_distance.py
+│   ├── extract_flow_distance.py
+│   └── results/                          # ← output: camera_params, backgrounds
+│       └── ref_Tonkatsu_6.7_3.5_1/
 │
 ├── Simulation/                            # ★ must cd here before running
 │   ├── main.py
+│   ├── results/                          # ← output: simulation snapshots, meshes
+│   │   └── run_YYYYMMDD_HHMMSS/
 │   ├── config/
 │   │   ├── config.py
 │   │   └── setting.xml
@@ -113,6 +119,7 @@ New_ViRheometry/
     ├── soft_interpolate.py
     ├── visualize_comparison.py
     ├── test_boundary_comparison.py
+    ├── result_setup1_*/                   # ← output: optimization results
     ├── moe_workspace5/
     └── libs/
 ```
@@ -121,31 +128,21 @@ New_ViRheometry/
 
 ## Data Directory Layout
 
+The `data/` directory contains **raw inputs only** and is never written to by any script.
+
 ```
 data/ref_Tonkatsu_6.7_3.5_1/
-├── settings.xml                           # H=6.7cm, W=3.5cm
-├── IMG_7796.JPG                           # calibration photo
-├── Background.png                         # output of pipeline.py
-├── Background_mask.png                    # output of pipeline.py
-├── theta_opt.txt                          # saved camera parameters
-├── exp/                                   # raw experiment photos
-│   └── config_00.png ~ config_16.png
-├── config/
-│   ├── config_00.png ~ config_08.png      # simulation reference snapshots
-│   ├── gray/                              # grayscale frames for flow extraction
-│   │   ├── camera_params.xml
-│   │   ├── settings.xml
-│   │   ├── config_01.png ~ config_08.png
-│   │   ├── flow_distances.csv
-│   │   └── flow_distances.json
-│   └── gray2/                             # second camera angle
-│       ├── camera_params.xml
-│       ├── settings.xml
-│       ├── config_01.png ~ config_08.png
-│       ├── flow_distances.csv
-│       └── flow_distances.json
-└── diff_binary.png / diff_combined.png
+├── settings.xml          # geometry config: W=3.5cm, H=6.7cm
+├── IMG_7796.JPG          # ChArUco calibration photo
+├── config_00.png         # calibration target (used by pipeline.py --target)
+├── config_01.png         # reference flow snapshots
+├── config_02.png
+├── ...
+└── config_08.png
 ```
+
+`config_00.png` is the initial state (before flow starts) used for camera calibration.
+`config_01.png` ~ `config_08.png` are the reference snapshots for flow distance measurement.
 
 Available datasets:
 
@@ -155,27 +152,59 @@ Available datasets:
 | `ref_Tonkatsu_5.5_2.3_1` | Tonkatsu sauce | 5.5 | 2.3 | `IMG_7799.JPG` |
 | `ref_Tonkatsu_6.7_3.5_1` | Tonkatsu sauce | 6.7 | 3.5 | `IMG_7796.JPG` |
 
+Naming convention: `ref_{Material}_{H}_{W}_{number}`
+
+---
+
+## Output Layout
+
+Each processing step writes to its own directory outside `data/`:
+
+```
+Calibration/results/ref_Tonkatsu_6.7_3.5_1/
+├── camera_params.xml       # calibrated camera parameters
+├── Background.png          # rendered background
+├── Background_mask.png     # binary foreground mask
+├── diff_combined.png       # calibration quality check (color diff)
+├── diff_binary.png         # calibration quality check (binary diff)
+├── flow_distances.csv      # extracted flow front positions [cm]
+└── flow_distances.json
+
+Optimization/result_setup1_topk_2_YYYYMMDD_HHMMSS/
+├── setup1_result.txt       # optimal η, n, σ_y
+└── ...
+
+Simulation/results/run_YYYYMMDD_HHMMSS/
+├── simulation_results.csv
+├── {n:.2f}_{eta:.2f}_{sigma_y:.2f}/
+│   ├── config_00.png ~ config_07.png
+│   └── *.obj
+└── snapdiff_00.png ~ snapdiff_07.png
+```
+
 ---
 
 ## Typical Workflow
 
 ```
-Real experiment
+Real experiment (photos + settings.xml in data/)
       │
       ▼
 ① Calibrate camera             (Calibration/pipeline.py)
-      │
+      │  → Calibration/results/<name>/camera_params.xml
+      │  → Calibration/results/<name>/Background.png
       ▼
 ② Extract flow distances       (Calibration/extract_flow_distance.py)
-      │
+      │  → Calibration/results/<name>/flow_distances.csv
       ▼
 ③ Optimize HB parameters       (Optimization/optimize_1setup.py)
-      │
+      │  → Optimization/result_setup1_*/
       ▼
 ④ Verify with simulation       (Simulation/main.py)
-      │
+      │  → Simulation/results/run_*/
       ▼
 ⑤ Compare with rheometer data  (FlowCurve/hb_fit.py + flowcurve.py)
+         → FlowCurve/figs/
 ```
 
 ---
@@ -277,12 +306,13 @@ python3 flowcurve.py \
 
 #### `pipeline.py` — Camera calibration
 
-ChArUco board calibration → DLT fine-tuning. Outputs `camera_params.xml`, `Background.png`, `Background_mask.png` next to `--calib_img`.
+ChArUco board calibration → DLT fine-tuning. Reads `settings.xml` from the directory of `--calib_img` (the data folder). Outputs `camera_params.xml`, `Background.png`, `Background_mask.png` to `--out_dir`.
 
 ```bash
 python3 Calibration/pipeline.py \
     --calib_img <IMG> \
-    --target <config_00.png> \
+    --target    <config_00.png> \
+    --out_dir   <OUTPUT_DIR> \
     [--bg_img <IMG>] \
     [--cube_alpha 0.7] \
     [--skip_calib --theta0 "..."]
@@ -290,54 +320,71 @@ python3 Calibration/pipeline.py \
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--calib_img` | required | Photo of ChArUco board |
+| `--calib_img` | required | Photo of ChArUco board (inside data dir) |
 | `--target` | required | Reference simulation snapshot (`config_00.png`) |
+| `--out_dir` | same dir as `--calib_img` | Output directory — use this to keep data clean |
 | `--bg_img` | same as `--calib_img` | Background photo |
 | `--cube_alpha` | `0.7` | Wireframe cube transparency |
 | `--skip_calib` | — | Skip ChArUco step; requires `--theta0` |
 | `--theta0` | — | Initial camera parameter string |
 
+> `settings.xml` is always read from the directory of `--calib_img`, regardless of `--out_dir`.
+
 **Examples:**
+```bash
+# Tonkatsu 6.7x3.5 — clean output
+python3 Calibration/pipeline.py \
+    --calib_img data/ref_Tonkatsu_6.7_3.5_1/IMG_7796.JPG \
+    --target    data/ref_Tonkatsu_6.7_3.5_1/config_00.png \
+    --out_dir   Calibration/results/ref_Tonkatsu_6.7_3.5_1
+```
+
 ```bash
 # Okonomiyaki
 python3 Calibration/pipeline.py \
     --calib_img data/ref_Okonomi_4.6_6.3_1/IMG_7806.JPG \
-    --target    data/ref_Okonomi_4.6_6.3_1/config/config_00.png
+    --target    data/ref_Okonomi_4.6_6.3_1/config_00.png \
+    --out_dir   Calibration/results/ref_Okonomi_4.6_6.3_1
 ```
 
 ```bash
-# Tonkatsu (5.5 x 2.3)
+# Tonkatsu 5.5x2.3
 python3 Calibration/pipeline.py \
     --calib_img data/ref_Tonkatsu_5.5_2.3_1/IMG_7799.JPG \
-    --target    data/ref_Tonkatsu_5.5_2.3_1/config/config_00.png
+    --target    data/ref_Tonkatsu_5.5_2.3_1/config_00.png \
+    --out_dir   Calibration/results/ref_Tonkatsu_5.5_2.3_1
 ```
 
 ```bash
-# Skip ChArUco using saved theta
+# Skip ChArUco using saved camera params
 python3 Calibration/pipeline.py \
     --calib_img data/ref_Tonkatsu_6.7_3.5_1/IMG_7796.JPG \
-    --target    data/ref_Tonkatsu_6.7_3.5_1/config/config_00.png \
+    --target    data/ref_Tonkatsu_6.7_3.5_1/config_00.png \
+    --out_dir   Calibration/results/ref_Tonkatsu_6.7_3.5_1 \
     --skip_calib \
-    --theta0 "$(cat data/ref_Tonkatsu_6.7_3.5_1/theta_opt.txt)"
+    --theta0 "..."
 ```
-
-> The directory of `--calib_img` must contain `settings.xml` with `<setup W="..." H="..."/>`.
 
 ---
 
 #### `extract_flow_distance.py` — Extract flow distances
 
-Processes `config_01.png ~ config_08.png` to measure flow front positions. Use `--print-dis1` to get the `-dis1` string ready for the optimizer.
+Processes `config_01.png ~ config_08.png` to measure flow front positions. Use `--camera-xml` to point at the calibration output, and `--output-csv/json` to save results outside `data/`.
 
 ```bash
-python3 Calibration/extract_flow_distance.py --dir <DIR> [options]
+python3 Calibration/extract_flow_distance.py \
+    --dir       <DATA_DIR> \
+    --camera-xml <camera_params.xml> \
+    --output-csv  <OUTPUT_CSV> \
+    --output-json <OUTPUT_JSON> \
+    [options]
 ```
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--dir` | required | Directory containing `config_*.png`, `settings.xml`, `camera_params.xml` |
-| `--settings` | auto | Override `settings.xml` path |
-| `--camera-xml` | auto | Override `camera_params.xml` path |
+| `--dir` | required | Directory containing `config_*.png` and `settings.xml` |
+| `--settings` | `<dir>/settings.xml` | Override `settings.xml` path |
+| `--camera-xml` | `<dir>/camera_params.xml` | Override `camera_params.xml` path |
 | `--images` | `config_*.png` | Override image glob pattern |
 | `--threshold` | `128` | Binarization threshold |
 | `--foreground` | `black` | Fluid color: `black` or `white` |
@@ -355,28 +402,35 @@ python3 Calibration/extract_flow_distance.py --dir <DIR> [options]
 
 **Examples:**
 ```bash
-# Tonkatsu 6.7x3.5 — first camera angle (gray/)
+# Tonkatsu 6.7x3.5 — clean output
 python3 Calibration/extract_flow_distance.py \
-    --dir data/ref_Tonkatsu_6.7_3.5_1/config/gray \
+    --dir        data/ref_Tonkatsu_6.7_3.5_1 \
+    --camera-xml Calibration/results/ref_Tonkatsu_6.7_3.5_1/camera_params.xml \
+    --output-csv  Calibration/results/ref_Tonkatsu_6.7_3.5_1/flow_distances.csv \
+    --output-json Calibration/results/ref_Tonkatsu_6.7_3.5_1/flow_distances.json \
     --monotonic --unit cm --print-dis1
 # → -dis1 1.4616 3.5214 5.6031 7.2681 8.3256 8.9129 9.2239 9.3288
 ```
 
 ```bash
-# Tonkatsu 6.7x3.5 — second camera angle (gray2/)
+# Okonomiyaki
 python3 Calibration/extract_flow_distance.py \
-    --dir data/ref_Tonkatsu_6.7_3.5_1/config/gray2 \
-    --monotonic --unit cm --print-dis1
-# → -dis1 1.1970 3.7921 6.4270 8.5508 9.6890 10.1595 10.4018 10.5528
+    --dir        data/ref_Okonomi_4.6_6.3_1 \
+    --camera-xml Calibration/results/ref_Okonomi_4.6_6.3_1/camera_params.xml \
+    --output-csv  Calibration/results/ref_Okonomi_4.6_6.3_1/flow_distances.csv \
+    --output-json Calibration/results/ref_Okonomi_4.6_6.3_1/flow_distances.json \
+    --foreground black --monotonic --print-dis1
 ```
 
 ```bash
 # With debug images
 python3 Calibration/extract_flow_distance.py \
-    --dir data/ref_Okonomi_4.6_6.3_1/config \
-    --foreground black --monotonic \
-    --debug-dir data/ref_Okonomi_4.6_6.3_1/debug \
-    --print-dis1
+    --dir        data/ref_Tonkatsu_6.7_3.5_1 \
+    --camera-xml Calibration/results/ref_Tonkatsu_6.7_3.5_1/camera_params.xml \
+    --output-csv  Calibration/results/ref_Tonkatsu_6.7_3.5_1/flow_distances.csv \
+    --output-json Calibration/results/ref_Tonkatsu_6.7_3.5_1/flow_distances.json \
+    --debug-dir  Calibration/results/ref_Tonkatsu_6.7_3.5_1/debug \
+    --monotonic --print-dis1
 ```
 
 ---
@@ -529,7 +583,7 @@ python3 optimize_1setup.py \
 
 **Examples:**
 ```bash
-# Tonkatsu 6.7x3.5 (gray/) — Top-2 experts
+# Tonkatsu 6.7x3.5 — Top-2 experts
 cd Optimization
 python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
@@ -539,7 +593,7 @@ python3 optimize_1setup.py \
 ```
 
 ```bash
-# Tonkatsu 6.7x3.5 (gray/) — Adaptive gating
+# Tonkatsu 6.7x3.5 — Adaptive gating
 cd Optimization
 python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
@@ -549,7 +603,7 @@ python3 optimize_1setup.py \
 ```
 
 ```bash
-# Tonkatsu 6.7x3.5 (gray/) — Threshold strategy
+# Tonkatsu 6.7x3.5 — Threshold strategy
 cd Optimization
 python3 optimize_1setup.py \
     --moe_dir moe_workspace5 \
@@ -595,7 +649,7 @@ Additional arguments:
 
 **Examples:**
 ```bash
-# Tonkatsu 6.7x3.5: gray/ as setup1, gray2/ as setup2 — Top-2
+# Two camera angles from same experiment — Top-2
 cd Optimization
 python3 optimize_2setups.py \
     --moe_dir moe_workspace5 \
@@ -676,16 +730,9 @@ Not standalone scripts. Imported automatically by `optimize_1setup.py` and `opti
 | Container width/height | W, H | cm |
 | Flow distance | dis | cm |
 
-### `data/` naming convention
-
-```
-ref_{Material}_{H}_{W}_{number}
-```
-Example: `ref_Tonkatsu_6.7_3.5_1` → Tonkatsu sauce, H = 6.7 cm, W = 3.5 cm, trial 1.
-
 ### MoE model (`moe_workspace5`)
 
-101 neural network experts with GMM gating. Predicts 8 flow distances from (W, H, η, n, σ_y) in milliseconds, enabling fast CMA-ES evaluation without running full MPM simulations.
+101 Gaussian Process experts with GMM gating. Predicts 8 flow distances from (W, H, η, n, σ_y) in milliseconds, enabling fast CMA-ES evaluation without running full MPM simulations.
 
 ### `lcmaes` (non-critical)
 
