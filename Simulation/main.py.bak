@@ -140,10 +140,6 @@ def main():
     parser.add_argument('--ref',      type=str,   required=True,
                         help='Reference folder containing config_XX.png, '
                              'settings.xml (W/H), and camera_params.xml.')
-    parser.add_argument('--out_dir',     type=str,   default=None,
-                        help='Output directory. Default: Simulation/results/run_<ts>/')
-    parser.add_argument('--camera_xml',  type=str,   default=None,
-                        help='Override camera_params.xml path (default: --ref/camera_params.xml)')
     parser.add_argument('--diff_amplify', type=float, default=5.0,
                         help='Brightness amplification for diff images (default: 5.0)')
     args = parser.parse_args()
@@ -157,8 +153,7 @@ def main():
     print("Loading settings from ref XMLs...")
     try:
         settings      = load_settings(args.ref)
-        cam_xml_path  = args.camera_xml if args.camera_xml else args.ref
-        camera_params = load_camera_params(cam_xml_path)
+        camera_params = load_camera_params(args.ref)
     except (FileNotFoundError, ValueError) as e:
         print(f"[ERROR] {e}")
         return
@@ -173,8 +168,7 @@ def main():
 
     # ── 2. タイムスタンプ付き結果ディレクトリ作成 ──
     timestamp    = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_root = args.out_dir if args.out_dir \
-                   else os.path.join("results", f"run_{timestamp}")
+    results_root = os.path.join("results", f"run_{timestamp}")
     os.makedirs(results_root, exist_ok=True)
 
     # ── 3. CSV 初期化 ──

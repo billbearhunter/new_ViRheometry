@@ -71,15 +71,13 @@ def main():
     p.add_argument("--maxiter",  type=int,   default=700)
     p.add_argument("--seed",     type=int,   default=42)
     p.add_argument("--verb",     type=int,   default=1)
-    p.add_argument("--out_dir",  type=str,   default=None,
-                   help="Output directory. Default: result_setup1_<strategy>_<ts>/")
     args = p.parse_args()
 
     # ── Output directory ──────────────────────────────────────────────────────
     ts           = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     strategy_str = f"topk_{args.topk}" if args.strategy == "topk" \
                    else f"{args.strategy}_{args.threshold}"
-    save_dir = args.out_dir if args.out_dir else f"result_setup1_{strategy_str}_{ts}"
+    save_dir = f"result_setup1_{strategy_str}_{ts}"
     os.makedirs(save_dir, exist_ok=True)
     print(f"\n[Info] Output directory: {save_dir}")
 
