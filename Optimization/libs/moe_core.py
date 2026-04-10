@@ -83,16 +83,17 @@ class _OfflineExactGP(gpytorch.models.ExactGP):
 
 @dataclass
 class ExpertBundle:
-    cid:       int
-    models:    List[torch.nn.Module]
-    likes:     List[gpytorch.likelihoods.Likelihood]
-    x_mean:    torch.Tensor
-    x_scale:   torch.Tensor
-    y_mean:    torch.Tensor
-    y_scale:   torch.Tensor
-    all_cols:  List[str]
-    log_idx:   List[int]
-    log_eps:   float
+    cid:          int
+    models:       List[torch.nn.Module]
+    likes:        List[gpytorch.likelihoods.Likelihood]
+    x_mean:       torch.Tensor
+    x_scale:      torch.Tensor
+    y_mean:       torch.Tensor
+    y_scale:      torch.Tensor
+    all_cols:     List[str]
+    log_idx:      List[int]
+    log_eps:      float
+    poly_residual: Optional[dict] = None   # poly-residual correction dict or None
 
 
 # ── Gating feature vector ──────────────────────────────────────────────────────
@@ -190,12 +191,25 @@ def get_adaptive_weights(
 
 # ── GP inference ───────────────────────────────────────────────────────────────
 
+def _apply_poly_powers(X: np.ndarray, powers: np.ndarray) -> np.ndarray:
+    """Reconstruct polynomial features from stored power matrix (no sklearn needed)."""
+    out = np.ones((X.shape[0], powers.shape[0]), dtype=np.float64)
+    for j, row in enumerate(powers):
+        for k, p in enumerate(row):
+            if p > 0:
+                out[:, j] *= X[:, k] ** p
+    return out
+
+
 def predict_expert_batch(
     bundle: ExpertBundle,
     n_batch, eta_batch, s_batch,
     W: float, H: float, device,
 ) -> np.ndarray:
-    """Run one expert's GP models on a batch of parameter vectors."""
+    """Run one expert's GP models on a batch of parameter vectors.
+
+    Applies poly-residual correction if the bundle was trained with it.
+    """
     batch_size = len(n_batch)
     if batch_size == 0:
         return np.array([])
@@ -208,17 +222,29 @@ def predict_expert_batch(
     vals[:, col_map["height"]]  = H
     for j in bundle.log_idx:
         vals[:, j] = np.log(np.clip(vals[:, j] + bundle.log_eps, 1e-12, None))
-    xt = torch.tensor(vals, dtype=DTYPE, device=device)
-    xt = (xt - bundle.x_mean) / bundle.x_scale
-    preds = []
+    # Keep scaled inputs for poly residual (in numpy)
+    vals_scaled = (vals - bundle.x_mean.cpu().numpy()) / bundle.x_scale.cpu().numpy()
+    xt = torch.tensor(vals_scaled, dtype=DTYPE, device=device)
+
+    # GP mean predictions (scaled space)
+    preds_scaled = []
     with torch.no_grad(), gpytorch.settings.fast_pred_var():
-        for i, (m, l) in enumerate(zip(bundle.models, bundle.likes)):
-            p_raw    = l(m(xt)).mean
-            scale    = bundle.y_scale[..., i:i+1].view(1)
-            mean     = bundle.y_mean[..., i:i+1].view(1)
-            p_scaled = p_raw * scale + mean
-            preds.append(p_scaled)
-    return torch.stack(preds).t().detach().cpu().numpy().astype(float)
+        for m, l in zip(bundle.models, bundle.likes):
+            preds_scaled.append(l(m(xt)).mean.detach().cpu().numpy())
+    Y_s = np.stack(preds_scaled, axis=1)   # (batch, 8) in scaled space
+
+    # Apply poly residual correction in scaled space before inverse-scaling
+    pr = bundle.poly_residual
+    if pr is not None:
+        powers = np.asarray(pr["powers"], dtype=int)
+        coef   = np.asarray(pr["coef"],   dtype=np.float64)
+        Xp     = _apply_poly_powers(vals_scaled, powers)
+        Y_s    = Y_s + Xp @ coef.T
+
+    # Inverse-scale: y_phys = Y_s * y_scale + y_mean
+    y_mean  = bundle.y_mean.cpu().numpy()    # (1, 8)
+    y_scale = bundle.y_scale.cpu().numpy()   # (1, 8)
+    return (Y_s * y_scale + y_mean).astype(float)
 
 
 def soft_predict_batch(
@@ -381,10 +407,12 @@ def load_expert_bundle(path: str, device) -> ExpertBundle:
             m.eval(); l.eval()
             models.append(m); likes.append(l)
 
-    all_cols = xs.get("all_cols", ["n", "eta", "sigma_y", "width", "height"])
-    log_cols = set(xs.get("log_cols", ["eta", "sigma_y"]))
-    log_idx  = [i for i, c in enumerate(all_cols) if c in log_cols]
-    return ExpertBundle(cid, models, likes, x_mean, x_scale, y_mean, y_scale, all_cols, log_idx, 1e-6)
+    all_cols     = xs.get("all_cols", ["n", "eta", "sigma_y", "width", "height"])
+    log_cols     = set(xs.get("log_cols", ["eta", "sigma_y"]))
+    log_idx      = [i for i, c in enumerate(all_cols) if c in log_cols]
+    poly_residual = ckpt.get("poly_residual")   # None if not trained
+    return ExpertBundle(cid, models, likes, x_mean, x_scale, y_mean, y_scale,
+                        all_cols, log_idx, 1e-6, poly_residual)
 
 
 # ── CMA-ES runner ──────────────────────────────────────────────────────────────

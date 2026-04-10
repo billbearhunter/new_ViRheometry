@@ -2,9 +2,7 @@ import taichi as ti
 import os
 import numpy as np
 import gc
-import os
 import ctypes
-import numpy as np
 from .xmlParser import MPMXMLData
 from .file_ops import FileOperations
 from config.config import MIN_ETA, MAX_ETA, MIN_N, MAX_N, MIN_SIGMA_Y, MAX_SIGMA_Y, MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT, DEFAULT_OUTPUT_DIR
@@ -12,7 +10,17 @@ from config.config import MIN_ETA, MAX_ETA, MIN_N, MAX_N, MIN_SIGMA_Y, MAX_SIGMA
 
 # # ti.init(arch=ti.cpu, offline_cache=True, default_fp=ti.f32, default_ip=ti.i32)
 # ti.init(arch=ti.gpu, offline_cache=True, default_fp=ti.f32, default_ip=ti.i32)
-gui = ti.GUI("AGTaichiMPM")
+
+# Support headless mode via environment variable (set TAICHI_HEADLESS=1 for servers /
+# data-collection pipelines that do not need a display window).
+if os.environ.get("TAICHI_HEADLESS", "0") == "1":
+    class _FakeGUI:          # minimal stub — no window, no event processing
+        running = True
+        def get_event(self, *_): return False
+        def show(self): pass
+    gui = _FakeGUI()
+else:
+    gui = ti.GUI("AGTaichiMPM")
 
 @ti.data_oriented
 class MPMSimulator:
