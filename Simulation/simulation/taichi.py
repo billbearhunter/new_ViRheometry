@@ -68,76 +68,64 @@ class MPMSimulator:
         if not (MIN_SIGMA_Y <= sigma_y <= MAX_SIGMA_Y):
             raise ValueError(f"sigma_y must be between {MIN_SIGMA_Y} and {MAX_SIGMA_Y}")
     
+    @staticmethod
+    def _read_max_x_from_dat(dat_filepath):
+        """Read the maximum x-coordinate from a saved .dat particle file.
+
+        This matches exactly how Creat_dataframe.py computed displacements for
+        the MoE training data, ensuring inference is consistent with training.
+        """
+        with open(dat_filepath, 'rb') as f:
+            num_points = int.from_bytes(f.read(4), 'little')
+            if num_points == 0:
+                return 0.0
+            positions = np.frombuffer(
+                f.read(3 * num_points * 4), dtype=np.float32
+            ).reshape((num_points, 3))
+        return float(positions[:, 0].max())
+
     def _execute_simulation_loop(self, output_dir):
         """Execute simulation main loop"""
         print('*** Parameters ***')
         print('  herschel_bulkley_power: ' + str(self.agtaichiMPM.ti_hb_n[None]))
         print('  eta: ' + str(self.agtaichiMPM.ti_hb_eta[None]))
         print('  yield_stress: ' + str(self.agtaichiMPM.ti_hb_sigmaY[None]))
-        # print('  setup width: ' + str(xmlData.cuboidData.max[0]))
-        # print('  setup height: ' + str(xmlData.cuboidData.max[1]))
 
+        # x_0frame: max-x of particles at frame 0, used as the displacement baseline.
+        # Displacement for frame N = max_x(N) - x_0frame.
+        x_0frame = None
+        x_diffs = []
 
-        # x_diffs = []
-        # x_0frame = 0.0    
-        # self.agtaichiMPM.py_num_saved_frames = 0
-
-        # # os.makedirs(output_dir, exist_ok=True)
-            
         while gui.running and not gui.get_event(gui.ESCAPE):
-            for i in range(100):              
+            for i in range(100):
                 self.agtaichiMPM.step()
                 time = self.agtaichiMPM.ti_iteration[None] * self.agtaichiMPM.py_dt
 
                 if time * self.agtaichiMPM.py_fps >= self.agtaichiMPM.py_num_saved_frames:
-                    # particle_is_inner_of_box_id = np.where(self.agtaichiMPM.ti_particle_is_inner_of_box.to_numpy()[0:self.agtaichiMPM.ti_particle_count[None]].astype(np.int32) == 1)
-                    # p_x = self.agtaichiMPM.ti_particle_x.to_numpy()[0:self.agtaichiMPM.ti_particle_count[None]].astype(np.float32)
-                    # np.delete(p_x, particle_is_inner_of_box_id,axis=0)
-                    # if self.agtaichiMPM.py_num_saved_frames == 0 :    
-                    #     x_0frame = np.max(p_x[:, 0])
-                    #     print('max x position: ', x_0frame)
-                    # elif self.agtaichiMPM.py_num_saved_frames > 0:
-                    #     x_diff = np.max(p_x[:, 0]) - x_0frame
-                    #     x_diffs.append(x_diff)
+                    frame = self.agtaichiMPM.py_num_saved_frames
 
+                    # Save particle .dat + generate OBJ
                     self.file_ops.saveFile(self.agtaichiMPM, output_dir)
 
-                    self.agtaichiMPM.compute_displacements()
+                    # Compute displacement from the .dat file just written.
+                    # Reading from the file mirrors Creat_dataframe.py exactly,
+                    # avoiding the race condition in the Taichi kernel approach.
+                    dat_path = os.path.join(
+                        output_dir, f'config_{frame:02d}.dat'
+                    )
+                    max_x = self._read_max_x_from_dat(dat_path)
 
-                    print("frame: ", self.agtaichiMPM.py_num_saved_frames)
+                    if frame == 0:
+                        x_0frame = max_x
+                    elif x_0frame is not None and 1 <= frame <= 8:
+                        x_diffs.append(max_x - x_0frame)
+
+                    print("frame: ", frame)
                     self.agtaichiMPM.py_num_saved_frames += 1
-
-                    # memory_usage = process.memory_info().rss / 1024 ** 2
-                    # print(f"memory used: {memory_usage:.2f} MB")
-
-                    # pos = self.agtaichiMPM.ti_particle_x.to_numpy() / 20 + 0.3
-                    # gui.circles(T(pos), radius=2, color=0xFFFFFF)
-                    # gui.show()
 
             if self.agtaichiMPM.py_num_saved_frames > self.agtaichiMPM.py_max_frames:
                 gc.collect()
-                break 
-
-        # self.agtaichiMPM.ti_frame_counter[None] = 0
-        
-        
-        # while self.agtaichiMPM.py_num_saved_frames <= self.agtaichiMPM.py_max_frames:
-        #     for i in range(100):
-        #         self.agtaichiMPM.step()
-        #         time = self.agtaichiMPM.ti_iteration[None] * self.agtaichiMPM.py_dt
-                
-        #         if time * self.agtaichiMPM.py_fps >= self.agtaichiMPM.py_num_saved_frames:
-                    
-        #             self.agtaichiMPM.compute_displacements()
-                    
-        #             print(f"frame: {self.agtaichiMPM.py_num_saved_frames}")
-        #             self.agtaichiMPM.py_num_saved_frames += 1
-            
-        #     if self.agtaichiMPM.py_num_saved_frames > self.agtaichiMPM.py_max_frames:
-        #         gc.collect()
-        #         break
-        
-        x_diffs = self.agtaichiMPM.ti_x_diffs.to_numpy()[:8]
+                break
 
         return np.array(x_diffs, dtype=np.float32)
     
