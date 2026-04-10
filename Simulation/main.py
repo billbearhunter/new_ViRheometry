@@ -36,10 +36,13 @@ def load_settings(ref: str) -> dict:
 
 
 def load_camera_params(ref: str) -> dict:
-    """ref/camera_params.xml からカメラパラメータを読み込む"""
-    path = os.path.join(ref, "camera_params.xml")
+    """Load camera_params.xml. ref can be a file path or a directory."""
+    if os.path.isdir(ref):
+        path = os.path.join(ref, "camera_params.xml")
+    else:
+        path = ref
     if not os.path.isfile(path):
-        raise FileNotFoundError(f"camera_params.xml not found in ref: {ref}")
+        raise FileNotFoundError(f"camera_params.xml not found: {path}")
     root = ET.parse(path).getroot()
     cam = root.find("camera")
     if cam is None:
@@ -143,7 +146,7 @@ def main():
     parser.add_argument('--out_dir',     type=str,   default=None,
                         help='Output directory. Default: Simulation/results/run_<ts>/')
     parser.add_argument('--camera_xml',  type=str,   default=None,
-                        help='Override camera_params.xml path (default: --ref/camera_params.xml)')
+                        help='Path to camera_params.xml file, or directory containing it (default: --ref/camera_params.xml)')
     parser.add_argument('--diff_amplify', type=float, default=5.0,
                         help='Brightness amplification for diff images (default: 5.0)')
     args = parser.parse_args()
