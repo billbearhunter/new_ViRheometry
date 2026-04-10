@@ -11,20 +11,9 @@ Runs all steps for a single material dataset in sequence:
 
 Each step writes to its own directory. data/ is never modified.
 
-Validation mode (--rheo):
-  Bypasses Step 3. Fits HB parameters directly from a rheometer CSV
-  (FlowCurve/hb_fit.py), then runs Step 4 with those parameters.
-  The simulation diff should be near-zero if calibration is correct.
-
 Usage:
     # Standard pipeline (Steps 1-3, optional 4)
     python3 run_pipeline.py --data data/ref_Tonkatsu_6.7_3.5_1
-
-    # Validation mode: use rheometer ground-truth parameters
-    python3 run_pipeline.py \\
-        --data data/ref_Tonkatsu_6.7_3.5_1 \\
-        --rheo FlowCurve/Rheo_Data/tonkatsu_20230113_2000_23C.csv \\
-        --simulate
 
     # Skip already-completed steps (for debugging)
     python3 run_pipeline.py --data data/ref_Tonkatsu_6.7_3.5_1 \\
@@ -88,15 +77,6 @@ def main():
     parser.add_argument("--data", required=True,
                         help="Material data directory (e.g. data/ref_Tonkatsu_6.7_3.5_1)")
 
-    # ---- validation mode ----
-    parser.add_argument("--rheo", default=None,
-                        help="Rheometer CSV path. Enables validation mode: fits HB parameters "
-                             "from measured data and uses them directly for simulation, "
-                             "bypassing CMA-ES optimization. Requires --simulate.")
-    parser.add_argument("--rheo-range", nargs=2, type=int, default=[5, 19],
-                        metavar=("START", "END"),
-                        help="Row index range for HB fitting (default: 5 19)")
-
     # ---- step 3 options ----
     parser.add_argument("--moe_dir", default="Optimization/moe_workspace5",
                         help="MoE model directory (default: Optimization/moe_workspace5)")
@@ -130,14 +110,9 @@ def main():
     parser.add_argument("--skip-extraction", action="store_true",
                         help="Skip Step 2 (use existing flow_distances.json)")
     parser.add_argument("--skip-optimization", action="store_true",
-                        help="Skip Step 3 (requires --eta/--n/--sigma_y or --rheo for Step 4)")
+                        help="Skip Step 3 (requires --eta/--n/--sigma_y for Step 4)")
 
     args = parser.parse_args()
-
-    # ── validation: --rheo implies --skip-optimization --simulate ────────────
-    if args.rheo and not args.simulate:
-        print("[info] --rheo enables validation mode. Adding --simulate automatically.")
-        args.simulate = True
 
     # ── derived paths ────────────────────────────────────────────
     data_dir      = (ROOT / args.data).resolve()
@@ -152,10 +127,6 @@ def main():
     print(f"[info] Geometry : W={W} cm, H={H} cm")
     print(f"[info] Data     : {data_dir}")
     print(f"[info] Outputs  : {calib_out}")
-    if args.rheo:
-        print(f"[info] Mode     : validation (rheometer parameters)")
-    else:
-        print(f"[info] Mode     : inference (CMA-ES optimization)")
 
     # ── Step 1: Camera Calibration ───────────────────────────────
     if not args.skip_calibration:
@@ -198,39 +169,10 @@ def main():
         if not flow_json.exists():
             sys.exit(f"[error] --skip-extraction set but {flow_json} not found")
 
-    # ── Step 3: HB Parameters ────────────────────────────────────
+    # ── Step 3: HB Parameter Optimization (CMA-ES) ───────────────
     best_eta = best_n = best_sigma_y = None
 
-    if args.rheo:
-        # Validation mode: fit from rheometer CSV
-        step_banner("3 (validation)", "HB Fitting from Rheometer Data")
-        rheo_path = (ROOT / args.rheo).resolve()
-        if not rheo_path.exists():
-            sys.exit(f"[error] Rheometer CSV not found: {rheo_path}")
-
-        rheo_json = calib_out / "rheo_params.json"
-        ret = run([
-            sys.executable, str(ROOT / "FlowCurve" / "hb_fit.py"),
-            "--file",  str(rheo_path),
-            "--range", str(args.rheo_range[0]), str(args.rheo_range[1]),
-            "--out",   str(rheo_json),
-        ])
-        if ret != 0:
-            sys.exit("[error] HB fitting failed — see output above")
-
-        with open(rheo_json) as f:
-            rheo_params = json.load(f)
-        best_eta     = rheo_params["eta"]
-        best_n       = rheo_params["n"]
-        best_sigma_y = rheo_params["sigma_y"]
-        print(f"\n[info] Rheometer HB parameters:")
-        print(f"         η      = {best_eta:.4f}  Pa·s^n")
-        print(f"         n      = {best_n:.4f}")
-        print(f"         σ_y    = {best_sigma_y:.4f}  Pa")
-        print(f"         R²     = {rheo_params['r2']:.6f}")
-
-    elif not args.skip_optimization:
-        # Inference mode: CMA-ES optimization
+    if not args.skip_optimization:
         step_banner(3, "HB Parameter Optimization (CMA-ES)")
 
         with open(flow_json) as f:
@@ -312,14 +254,9 @@ def main():
     print("  Pipeline complete")
     print(f"{'='*60}")
     print(f"  Calibration outputs : {calib_out}/")
-    if args.rheo:
-        print(f"  Rheometer params    : {calib_out}/rheo_params.json")
-    else:
-        print(f"  Optimization result : Optimization/result_setup1_*/")
+    print(f"  Optimization result : Optimization/result_setup1_*/")
     if args.simulate:
         print(f"  Simulation result   : Simulation/results/run_*/")
-        if args.rheo:
-            print(f"  [check] snapdiff_*.png should be near-zero if calibration is correct")
 
 
 if __name__ == "__main__":
