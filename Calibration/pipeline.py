@@ -711,12 +711,18 @@ def main():
     parser.add_argument("--skip_calib", action="store_true")
     parser.add_argument("--theta0",     default=None)
     parser.add_argument("--out_dir",    default=None,
-                        help="Output directory. Default: same directory as --calib_img")
+                        help="Output directory. Default: Calibration/results/<material_name>/")
     args = parser.parse_args()
 
     data_dir = os.path.dirname(os.path.abspath(args.calib_img))
-    out_dir = args.out_dir if args.out_dir else data_dir
+    if args.out_dir:
+        out_dir = args.out_dir
+    else:
+        material_name = os.path.basename(data_dir)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        out_dir = os.path.join(script_dir, "results", material_name)
     os.makedirs(out_dir, exist_ok=True)
+    print(f"[info] Output directory: {out_dir}")
 
     settings_path = os.path.join(data_dir, "settings.xml")
     if not os.path.exists(settings_path):

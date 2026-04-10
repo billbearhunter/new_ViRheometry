@@ -13,7 +13,7 @@
 3. [Project Structure](#project-structure)
 4. [Data Directory Layout](#data-directory-layout)
 5. [Output Layout](#output-layout)
-6. [Typical Workflow](#typical-workflow)
+6. [Quick Start](#quick-start)
 7. [Module Reference](#module-reference)
    - [FlowCurve](#flowcurve)
    - [Calibration](#calibration)
@@ -184,7 +184,56 @@ Simulation/results/run_YYYYMMDD_HHMMSS/
 
 ---
 
-## Typical Workflow
+## Quick Start
+
+### One-command pipeline
+
+```bash
+python3 run_pipeline.py --data data/ref_Tonkatsu_6.7_3.5_1
+```
+
+This runs Steps 1–3 automatically and keeps `data/` untouched. Add `--simulate` to also run the MPM verification (Step 4).
+
+```bash
+# Full pipeline including simulation
+python3 run_pipeline.py \
+    --data data/ref_Tonkatsu_6.7_3.5_1 \
+    --strategy topk --topk 2 \
+    --simulate
+
+# Skip already-completed steps (useful for debugging)
+python3 run_pipeline.py \
+    --data data/ref_Tonkatsu_6.7_3.5_1 \
+    --skip-calibration \
+    --skip-extraction
+
+# Skip optimization and run simulation with known parameters
+python3 run_pipeline.py \
+    --data data/ref_Tonkatsu_6.7_3.5_1 \
+    --skip-calibration --skip-extraction --skip-optimization \
+    --simulate --eta 26.39 --n 0.429 --sigma_y 13.05
+```
+
+`run_pipeline.py` arguments:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--data` | required | Material data directory |
+| `--moe_dir` | `Optimization/moe_workspace5` | MoE model directory |
+| `--strategy` | `topk` | Expert strategy: `topk`, `threshold`, `adaptive`, `all` |
+| `--topk` | `2` | Experts for `topk` |
+| `--threshold` | `0.01` | Weight threshold for `threshold` |
+| `--confidence_threshold` | `0.7` | Confidence for `adaptive` |
+| `--maxiter` | `700` | CMA-ES max iterations |
+| `--simulate` | — | Also run MPM simulation (Step 4) |
+| `--eta / --n / --sigma_y` | — | Override parameters for Step 4 |
+| `--skip-calibration` | — | Skip Step 1 |
+| `--skip-extraction` | — | Skip Step 2 |
+| `--skip-optimization` | — | Skip Step 3 |
+
+### Manual step-by-step
+
+Each step can also be run individually for debugging:
 
 ```
 Real experiment (photos + settings.xml in data/)
@@ -200,7 +249,7 @@ Real experiment (photos + settings.xml in data/)
 ③ Optimize HB parameters       (Optimization/optimize_1setup.py)
       │  → Optimization/result_setup1_*/
       ▼
-④ Verify with simulation       (Simulation/main.py)
+④ Verify with simulation       (Simulation/main.py)      (optional)
       │  → Simulation/results/run_*/
       ▼
 ⑤ Compare with rheometer data  (FlowCurve/hb_fit.py + flowcurve.py)
@@ -312,7 +361,7 @@ ChArUco board calibration → DLT fine-tuning. Reads `settings.xml` from the dir
 python3 Calibration/pipeline.py \
     --calib_img <IMG> \
     --target    <config_00.png> \
-    --out_dir   <OUTPUT_DIR> \
+    [--out_dir   <OUTPUT_DIR>] \
     [--bg_img <IMG>] \
     [--cube_alpha 0.7] \
     [--skip_calib --theta0 "..."]
@@ -322,7 +371,7 @@ python3 Calibration/pipeline.py \
 |----------|---------|-------------|
 | `--calib_img` | required | Photo of ChArUco board (inside data dir) |
 | `--target` | required | Reference simulation snapshot (`config_00.png`) |
-| `--out_dir` | same dir as `--calib_img` | Output directory — use this to keep data clean |
+| `--out_dir` | `Calibration/results/<material_name>/` | Output directory |
 | `--bg_img` | same as `--calib_img` | Background photo |
 | `--cube_alpha` | `0.7` | Wireframe cube transparency |
 | `--skip_calib` | — | Skip ChArUco step; requires `--theta0` |
@@ -332,27 +381,32 @@ python3 Calibration/pipeline.py \
 
 **Examples:**
 ```bash
-# Tonkatsu 6.7x3.5 — clean output
+# Tonkatsu 6.7x3.5 — output auto-goes to Calibration/results/ref_Tonkatsu_6.7_3.5_1/
 python3 Calibration/pipeline.py \
     --calib_img data/ref_Tonkatsu_6.7_3.5_1/IMG_7796.JPG \
-    --target    data/ref_Tonkatsu_6.7_3.5_1/config_00.png \
-    --out_dir   Calibration/results/ref_Tonkatsu_6.7_3.5_1
+    --target    data/ref_Tonkatsu_6.7_3.5_1/config_00.png
 ```
 
 ```bash
 # Okonomiyaki
 python3 Calibration/pipeline.py \
     --calib_img data/ref_Okonomi_4.6_6.3_1/IMG_7806.JPG \
-    --target    data/ref_Okonomi_4.6_6.3_1/config_00.png \
-    --out_dir   Calibration/results/ref_Okonomi_4.6_6.3_1
+    --target    data/ref_Okonomi_4.6_6.3_1/config_00.png
 ```
 
 ```bash
 # Tonkatsu 5.5x2.3
 python3 Calibration/pipeline.py \
     --calib_img data/ref_Tonkatsu_5.5_2.3_1/IMG_7799.JPG \
-    --target    data/ref_Tonkatsu_5.5_2.3_1/config_00.png \
-    --out_dir   Calibration/results/ref_Tonkatsu_5.5_2.3_1
+    --target    data/ref_Tonkatsu_5.5_2.3_1/config_00.png
+```
+
+```bash
+# Custom output directory
+python3 Calibration/pipeline.py \
+    --calib_img data/ref_Tonkatsu_6.7_3.5_1/IMG_7796.JPG \
+    --target    data/ref_Tonkatsu_6.7_3.5_1/config_00.png \
+    --out_dir   /path/to/custom/output
 ```
 
 ```bash
@@ -360,16 +414,14 @@ python3 Calibration/pipeline.py \
 python3 Calibration/pipeline.py \
     --calib_img data/ref_Tonkatsu_6.7_3.5_1/IMG_7796.JPG \
     --target    data/ref_Tonkatsu_6.7_3.5_1/config_00.png \
-    --out_dir   Calibration/results/ref_Tonkatsu_6.7_3.5_1 \
-    --skip_calib \
-    --theta0 "..."
+    --skip_calib --theta0 "..."
 ```
 
 ---
 
 #### `extract_flow_distance.py` — Extract flow distances
 
-Processes `config_01.png ~ config_08.png` to measure flow front positions. Use `--camera-xml` to point at the calibration output, and `--output-csv/json` to save results outside `data/`.
+Processes `config_01.png ~ config_08.png` to measure flow front positions. `config_00.png` is automatically excluded (it is the static initial frame). Use `--camera-xml` to point at the calibration output, and `--output-csv/json` to save results outside `data/`.
 
 ```bash
 python3 Calibration/extract_flow_distance.py \
@@ -384,7 +436,7 @@ python3 Calibration/extract_flow_distance.py \
 |----------|---------|-------------|
 | `--dir` | required | Directory containing `config_*.png` and `settings.xml` |
 | `--settings` | `<dir>/settings.xml` | Override `settings.xml` path |
-| `--camera-xml` | `<dir>/camera_params.xml` | Override `camera_params.xml` path |
+| `--camera-xml` | `<dir>/camera_params.xml` | Path to `camera_params.xml` (file or directory) |
 | `--images` | `config_*.png` | Override image glob pattern |
 | `--threshold` | `128` | Binarization threshold |
 | `--foreground` | `black` | Fluid color: `black` or `white` |
@@ -456,6 +508,7 @@ python3 main.py \
 | `--n` | required | Power-law index n [-] |
 | `--sigma_y` | required | Yield stress σ_y [Pa] |
 | `--ref` | required | Path to reference data directory |
+| `--camera_xml` | `--ref/camera_params.xml` | Path to `camera_params.xml` file or directory (e.g. `Calibration/results/<name>/`) |
 | `--diff_amplify` | `5.0` | Brightness amplification for diff images |
 
 **Output** saved to `Simulation/results/run_YYYYMMDD_HHMMSS/`:
@@ -472,26 +525,26 @@ results/run_20260409_153000/
 ```bash
 cd Simulation
 python3 main.py \
-    --eta 4.537544237132824 \
-    --n 0.9999980659350599 \
-    --sigma_y 1.007011462027015 \
-    --ref ../data/ref_Tonkatsu_6.7_3.5_1
-```
-
-```bash
-cd Simulation
-python3 main.py \
-    --eta 3.808008883317525 \
-    --n 0.9839671447200721 \
-    --sigma_y 1.007119796275376 \
-    --ref ../data/ref_Tonkatsu_5.5_2.3_1
-```
-
-```bash
-cd Simulation
-python3 main.py \
-    --eta 4.537 --n 0.9999 --sigma_y 1.007 \
+    --eta 26.389 --n 0.4289 --sigma_y 13.046 \
     --ref ../data/ref_Tonkatsu_6.7_3.5_1 \
+    --camera_xml ../Calibration/results/ref_Tonkatsu_6.7_3.5_1/camera_params.xml
+```
+
+```bash
+cd Simulation
+python3 main.py \
+    --eta 3.808 --n 0.984 --sigma_y 1.007 \
+    --ref ../data/ref_Tonkatsu_5.5_2.3_1 \
+    --camera_xml ../Calibration/results/ref_Tonkatsu_5.5_2.3_1/camera_params.xml
+```
+
+```bash
+# --camera_xml also accepts a directory
+cd Simulation
+python3 main.py \
+    --eta 26.389 --n 0.4289 --sigma_y 13.046 \
+    --ref ../data/ref_Tonkatsu_6.7_3.5_1 \
+    --camera_xml ../Calibration/results/ref_Tonkatsu_6.7_3.5_1 \
     --diff_amplify 10.0
 ```
 

@@ -228,16 +228,15 @@ def discover_files(dir_path: str) -> dict:
         raise FileNotFoundError(f"Not found: {settings}")
 
     camera = d / "camera_params.xml"
-    if not camera.exists():
-        raise FileNotFoundError(f"Not found: {camera}")
 
-    images = sorted(d.glob("config_*.png"))
+    # config_00.png is the calibration target (initial state, no flow) — skip it
+    images = sorted(p for p in d.glob("config_*.png") if p.name != "config_00.png")
     if not images:
-        raise FileNotFoundError(f"No config_*.png found in {d}")
+        raise FileNotFoundError(f"No config_*.png (excluding config_00) found in {d}")
 
     return {
         "settings": str(settings),
-        "camera_xml": str(camera),
+        "camera_xml": str(camera) if camera.exists() else None,
         "images": [str(p) for p in images],
     }
 
@@ -434,6 +433,15 @@ def main() -> None:
     print(" ".join(f"{d:.7f}" for d in distances_out))
     if args.print_dis1:
         print("-dis1 " + " ".join(f"{d:.7f}" for d in distances_out))
+
+    # Sanity check: warn if all distances are nearly identical (likely config_00 included)
+    if len(distances_out) > 1:
+        spread = max(distances_out) - min(distances_out)
+        if spread < 0.01:
+            print(f"\n[WARN] All distances are nearly identical (spread={spread:.4f} cm).")
+            print("       This usually means config_00.png (the static initial frame) was")
+            print("       included. Use --images to exclude it, e.g.:")
+            print(f"       --images '{args.dir}/config_0[1-9].png'")
 
 
 if __name__ == "__main__":
