@@ -13,6 +13,37 @@ import argparse
 import os
 import datetime
 import csv
+from pathlib import Path
+
+_SETTINGS_TEMPLATE = """\
+<?xml version="1.0"?>
+<Optimizer>
+  <!--
+    settings.xml  —  container geometry for this experiment
+    W = container width  [cm]
+    H = container height [cm]
+  -->
+  <setup RHO="1.0" H="{H}" W="{W}" />
+  <cuboid min="-0.15 -0.15 -0.15" max="{W} {H} 4.15"
+          density="1.0" cell_samples_per_dim="2"
+          vel="0.0 0.0 0.0" omega="0.0 0.0 0.0" />
+  <static_box min="-100 -1 -100" max="100  0 100" boundary_behavior="sticking"/>
+  <static_box min="-1   0  0"   max="0   20   4"  boundary_behavior="sticking"/>
+  <static_box min="-1   0 -0.3" max="{W} 20   0"  boundary_behavior="sticking"/>
+  <static_box min="-1   0  4"   max="{W} 20  4.3" boundary_behavior="sticking"/>
+</Optimizer>
+"""
+
+
+def _write_setup_dir(data_root: str, material: str, H_cm: float, W_cm: float, index: int) -> str:
+    """Create data/ref_<material>_<H>_<W>_<index>/ and write settings.xml."""
+    dir_name = f"ref_{material}_{H_cm:.1f}_{W_cm:.1f}_{index}"
+    setup_dir = Path(data_root) / dir_name
+    setup_dir.mkdir(parents=True, exist_ok=True)
+    (setup_dir / "settings.xml").write_text(
+        _SETTINGS_TEMPLATE.format(W=f"{W_cm:.1f}", H=f"{H_cm:.1f}")
+    )
+    return str(setup_dir)
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -73,6 +104,13 @@ def main():
     p.add_argument("--verb",     type=int,   default=1)
     p.add_argument("--out_dir",  type=str,   default=None,
                    help="Output directory. Default: result_setup1_<strategy>_<ts>/")
+    p.add_argument("--material",     type=str, default=None,
+                   help="Material name for auto-creating Setup 2 data directory "
+                        "(e.g. Tonkatsu). If omitted, no directory is created.")
+    p.add_argument("--data_root",    type=str, default="../data",
+                   help="Root directory for data folders (default: ../data)")
+    p.add_argument("--setup2_index", type=int, default=2,
+                   help="Index appended to Setup 2 directory name (default: 2)")
     args = p.parse_args()
 
     # ── Output directory ──────────────────────────────────────────────────────
@@ -192,6 +230,12 @@ def main():
         print(f"Recommended Setup 2: W={s2.W:.3f}  H={s2.H:.3f}")
         np.savetxt(os.path.join(save_dir, "setup1_recommended_setup2_WH.txt"),
                    np.array([[s2.W, s2.H]]))
+        if args.material:
+            setup2_dir = _write_setup_dir(
+                args.data_root, args.material, s2.H, s2.W, args.setup2_index
+            )
+            print(f"Created Setup 2 data directory: {setup2_dir}")
+            print(f"  → settings.xml written (W={s2.W:.1f} cm, H={s2.H:.1f} cm)")
     except Exception as e:
         print(f"[Error] Mechanism search failed: {e}")
 
