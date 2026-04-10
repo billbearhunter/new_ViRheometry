@@ -4,9 +4,11 @@ hb_fit.py  –  Herschel-Bulkley fitting for Anton Paar rheometer data
 Usage:
     python hb_fit.py --file sample.csv
     python hb_fit.py --file sample.csv --range 5 19
+    python hb_fit.py --file sample.csv --out params.json
 """
 
 import argparse
+import json
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
@@ -44,6 +46,16 @@ def fit_hb(gamma_dot, sigma, idx_start, idx_end):
           f"(γ̇ = {x.iloc[0]:.3g} – {x.iloc[-1]:.3g} s⁻¹)")
     print("=" * 40)
 
+    return {
+        "eta": float(K),
+        "n": float(n),
+        "sigma_y": float(sigma_y),
+        "r2": float(r2),
+        "eta_err": float(perr[0]),
+        "n_err": float(perr[1]),
+        "sigma_y_err": float(perr[2]),
+    }
+
 
 def main():
     parser = argparse.ArgumentParser(description="HB fitting for Anton Paar CSV data.")
@@ -51,10 +63,17 @@ def main():
     parser.add_argument("--range", nargs=2, type=int, default=[5, 19],
                         metavar=("START", "END"),
                         help="Row index range for fitting (default: 5 19)")
+    parser.add_argument("--out", default=None,
+                        help="Save fitted parameters to JSON file")
     args = parser.parse_args()
 
     df = pd.read_table(args.file, header=5, encoding="UTF-16")
-    fit_hb(df['[1/s]'], df['[Pa]'], args.range[0], args.range[1])
+    result = fit_hb(df['[1/s]'], df['[Pa]'], args.range[0], args.range[1])
+
+    if args.out:
+        with open(args.out, "w") as f:
+            json.dump(result, f, indent=2)
+        print(f"[save] {args.out}")
 
 
 if __name__ == "__main__":

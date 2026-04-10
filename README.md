@@ -143,7 +143,8 @@ Calibration/results/ref_<Material>_<H>_<W>_<N>/
 ├── diff_combined.png       # Color diff for calibration quality check
 ├── diff_binary.png         # Binary diff for calibration quality check
 ├── flow_distances.csv      # Extracted flow front positions [cm]
-└── flow_distances.json
+├── flow_distances.json
+└── rheo_params.json        # HB parameters from rheometer fit (validation mode only)
 
 Optimization/result_setup1_<strategy>_<timestamp>/
 └── setup1_result.txt       # Optimal η, n, σ_y
@@ -160,32 +161,41 @@ Simulation/results/run_<timestamp>/
 
 ## Quick Start
 
-### One-command pipeline
+### Inference mode (standard)
 
-Run Steps 1–3 with a single command from the project root:
+Run Steps 1–3 to infer HB parameters from flow observations, then optionally verify with simulation:
 
 ```bash
 python3 run_pipeline.py --data data/ref_Tonkatsu_6.7_3.5_1
-```
 
-Add `--simulate` to also run the MPM verification (Step 4):
-
-```bash
 python3 run_pipeline.py \
     --data data/ref_Tonkatsu_6.7_3.5_1 \
     --strategy topk --topk 2 \
     --simulate
 ```
 
-Use `--skip-*` flags to re-run individual steps without repeating earlier ones:
+### Validation mode
+
+When rheometer measurements are available for the same material, use `--rheo` to validate the full pipeline. HB parameters are fitted directly from the measured data and used for simulation without CMA-ES. The resulting `snapdiff_*.png` images should be near-zero if calibration and simulation are correct.
 
 ```bash
-# Re-run only optimization (calibration and extraction already done)
+python3 run_pipeline.py \
+    --data data/ref_Tonkatsu_6.7_3.5_1 \
+    --rheo FlowCurve/Rheo_Data/tonkatsu_20230113_2000_23C.csv \
+    --simulate
+```
+
+### Debugging individual steps
+
+Use `--skip-*` flags to re-run only specific steps:
+
+```bash
+# Re-run only optimization
 python3 run_pipeline.py \
     --data data/ref_Tonkatsu_6.7_3.5_1 \
     --skip-calibration --skip-extraction
 
-# Run only simulation with known parameters
+# Run simulation with manually specified parameters
 python3 run_pipeline.py \
     --data data/ref_Tonkatsu_6.7_3.5_1 \
     --skip-calibration --skip-extraction --skip-optimization \
@@ -197,6 +207,8 @@ python3 run_pipeline.py \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--data` | required | Material data directory |
+| `--rheo` | — | Rheometer CSV — enables validation mode |
+| `--rheo-range START END` | `5 19` | Row index range for HB fitting |
 | `--moe_dir` | `Optimization/moe_workspace5` | MoE model directory |
 | `--strategy` | `topk` | Expert strategy: `topk`, `threshold`, `adaptive`, `all` |
 | `--topk` | `2` | Number of experts for `topk` |
@@ -204,10 +216,10 @@ python3 run_pipeline.py \
 | `--confidence_threshold` | `0.7` | Confidence for `adaptive` |
 | `--max_experts` | `5` | Max experts for `threshold` |
 | `--maxiter` | `700` | CMA-ES max iterations |
-| `--simulate` | — | Run MPM simulation after optimization |
+| `--simulate` | — | Run MPM simulation (Step 4) |
 | `--eta / --n / --sigma_y` | — | Override HB parameters for simulation |
-| `--skip-calibration` | — | Skip Step 1, use existing results |
-| `--skip-extraction` | — | Skip Step 2, use existing results |
+| `--skip-calibration` | — | Skip Step 1 |
+| `--skip-extraction` | — | Skip Step 2 |
 | `--skip-optimization` | — | Skip Step 3 |
 
 ### Pipeline overview
@@ -216,20 +228,26 @@ python3 run_pipeline.py \
 data/<material>/
       |
       v
-Step 1   Camera calibration       Calibration/pipeline.py
+Step 1   Camera calibration         Calibration/pipeline.py
       |  -> Calibration/results/<material>/camera_params.xml
       |
       v
-Step 2   Flow distance extraction  Calibration/extract_flow_distance.py
+Step 2   Flow distance extraction    Calibration/extract_flow_distance.py
       |  -> Calibration/results/<material>/flow_distances.csv
       |
       v
-Step 3   HB parameter optimization  Optimization/optimize_1setup.py
+Step 3a  HB optimization (inference) Optimization/optimize_1setup.py
       |  -> Optimization/result_setup1_*/
       |
+      | -- or, with --rheo --
+      |
+Step 3b  HB fitting (validation)     FlowCurve/hb_fit.py
+      |  -> Calibration/results/<material>/rheo_params.json
+      |
       v
-Step 4   MPM simulation (optional)  Simulation/main.py
+Step 4   MPM simulation (optional)   Simulation/main.py
          -> Simulation/results/run_*/
+         -> snapdiff_*.png (should be near-zero in validation mode)
 ```
 
 ---
@@ -493,13 +511,14 @@ python3 main.py \
 Fits σ = K · γ̇^n + σ_Y to Anton Paar rheometer CSV data. Prints K, n, σ_Y with errors and R².
 
 ```bash
-python3 FlowCurve/hb_fit.py --file <CSV> [--range START END]
+python3 FlowCurve/hb_fit.py --file <CSV> [--range START END] [--out params.json]
 ```
 
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--file` | required | Rheometer CSV path (UTF-16, header at row 5) |
 | `--range START END` | `5 19` | Row index range for fitting |
+| `--out` | — | Save fitted parameters to JSON (for use with `run_pipeline.py --rheo`) |
 
 **Example:**
 
