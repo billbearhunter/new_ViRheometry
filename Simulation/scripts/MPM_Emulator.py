@@ -91,13 +91,21 @@ class MPMEmulator:
                f'-g "{x_value}"')       # Displacement
         return cmd
     
-    def _get_csv_paths(self):
-        """Find all simulation_results.csv files in run directories"""
-        # Look for directories starting with 'run_' inside results/
-        run_dirs = glob.glob(os.path.join(self.base_path, 'run_*'))
-        csv_paths = []
-        for run_dir in run_dirs:
+    def _get_csv_paths(self, run_dir=None):
+        """Find simulation_results.csv files.
+
+        If run_dir is given, only check that directory.
+        Otherwise scan all run_* and validation_* directories under base_path.
+        """
+        if run_dir is not None:
             csv_path = os.path.join(run_dir, "simulation_results.csv")
+            return [csv_path] if os.path.exists(csv_path) else []
+
+        candidate_dirs = (glob.glob(os.path.join(self.base_path, 'run_*')) +
+                          glob.glob(os.path.join(self.base_path, 'validation_*')))
+        csv_paths = []
+        for d in candidate_dirs:
+            csv_path = os.path.join(d, "simulation_results.csv")
             if os.path.exists(csv_path):
                 csv_paths.append(csv_path)
         return csv_paths
@@ -155,11 +163,15 @@ class MPMEmulator:
             print(f"Error parsing CSV row: {e}")
             return None, None, None
     
-    def render_all(self):
-        """Render all OBJ files with config-specific displacement values"""
-        
+    def render_all(self, run_dir=None):
+        """Render OBJ files with config-specific displacement values.
+
+        Args:
+            run_dir: If given, only render this specific directory.
+                     If None, renders all run_* and validation_* directories.
+        """
         # 1. Find all CSV files (one per run)
-        csv_paths = self._get_csv_paths()
+        csv_paths = self._get_csv_paths(run_dir=run_dir)
         if not csv_paths:
             print(f"No simulation_results.csv files found in {self.base_path}")
             return

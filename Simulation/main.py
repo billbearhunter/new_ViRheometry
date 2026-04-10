@@ -226,9 +226,7 @@ def main():
     # ── 9. レンダリング ──
     print("\nRendering OBJ files...")
     renderer = MPM_Emulator.MPMEmulator()
-    # カメラパラメータを渡せる場合はここで設定
-    # 例: renderer.set_camera(**camera_params)
-    renderer.render_all()
+    renderer.render_all(run_dir=results_root)
     print("Rendering finished.")
 
     # ── 10. 差分画像生成 ──
