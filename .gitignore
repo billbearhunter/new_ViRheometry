@@ -1,0 +1,15 @@
+.DS_Store
+*.bak
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+CMakeCache.txt
+CMakeFiles/
+*.so
+*.o
+.vscode/
+.idea/
+outputs/
+results/
