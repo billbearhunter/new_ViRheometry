@@ -13,3 +13,6 @@ CMakeFiles/
 .idea/
 outputs/
 results/
+
+# DataPipeline runtime workspace (data CSVs, trained models, metrics)
+DataPipeline/workspace/
