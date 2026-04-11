@@ -442,7 +442,19 @@ def main():
         if bo_csv.exists() and train_csv.exists():
             df_old = pd.read_csv(train_csv)
             df_bo  = pd.read_csv(bo_csv)
+            # BO points are targeted to this cluster — fill missing labels so
+            # train_experts.py's cluster_conf>=CONF_THRESHOLD filter keeps them.
+            if "cluster_id" in df_old.columns and "cluster_id" not in df_bo.columns:
+                df_bo["cluster_id"] = cid
+            if "cluster_conf" in df_old.columns and "cluster_conf" not in df_bo.columns:
+                df_bo["cluster_conf"] = 1.0
             df_new = pd.concat([df_old, df_bo], ignore_index=True)
+            # Fill any remaining NaN in these two columns (older BO CSVs)
+            if "cluster_id" in df_new.columns:
+                df_new.loc[df_new["cluster_id"].isna(), "cluster_id"] = cid
+                df_new["cluster_id"] = df_new["cluster_id"].astype(int)
+            if "cluster_conf" in df_new.columns:
+                df_new.loc[df_new["cluster_conf"].isna(), "cluster_conf"] = 1.0
             df_new.to_csv(train_csv, index=False)
             log.info(f"  Cluster {cid}: {len(df_old)} + {len(df_bo)} → {len(df_new)} rows")
             bo_csv.unlink()   # remove tmp file after merge
