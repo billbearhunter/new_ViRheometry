@@ -1,30 +1,41 @@
 """
 DataPipeline/bo_collect.py
 ==========================
-Step 4.5 – BO-guided targeted data collection for under-performing clusters.
+Step 4.5 – Targeted data collection for under-performing clusters.
 
-Workflow
---------
-1. Read evaluate_experts.py metrics CSV → find clusters whose MaxErr > threshold
-2. For each bad cluster:
-   a. Load its parameter bounding box from boxes.json
-   b. Load existing cluster training data → hot-start a lightweight SVGP
-   c. BO loop: variance-based acquisition → HeadlessSimulator → append CSV
-3. After all bad clusters are done, call train_experts.py --clusters <ids>
-   to retrain only those experts
+Two modes:
+  --mode bo   (default) Variance-based BO acquisition in cluster box
+  --mode lhs  Latin Hypercube Sampling in cluster box + GMM filter
+
+The LHS mode is recommended: it samples uniformly in the cluster bounding
+box, runs MPM, then uses the GMM gating network to assign each point to
+its correct cluster.  Only points that the GMM assigns to the target
+cluster (with conf >= threshold) are kept; the rest are distributed to
+their GMM-assigned clusters as bonus data.
+
+Workflow (LHS mode)
+-------------------
+1. Generate N_batch LHS points in the target cluster's bounding box
+2. Run MPM simulation for each point → flow distances
+3. Build φ (gating features) from (flow_distances, W, H)
+4. GMM.predict() → cluster_id, cluster_conf
+5. Points assigned to target cluster (conf ≥ 0.6) → target cluster CSV
+6. Points assigned elsewhere → distributed to correct cluster CSV (bonus)
+7. Repeat until target cluster has enough new points
 
 Usage
 -----
-# Auto-detect bad clusters (MaxErr > 1.0 cm) from metrics CSV:
+# LHS mode (recommended):
 python bo_collect.py --data workspace/moe_ws \\
-                     --metrics metrics.csv \\
-                     --maxerr-thresh 1.0 \\
-                     --n-per-cluster 200
+                     --clusters 3 21 61 88 \\
+                     --n-per-cluster 200 \\
+                     --mode lhs
 
-# Manually specify which clusters to target:
+# BO mode (variance-based, legacy):
 python bo_collect.py --data workspace/moe_ws \\
                      --clusters 19 42 46 \\
-                     --n-per-cluster 300
+                     --n-per-cluster 300 \\
+                     --mode bo
 
 # Dry-run: show which clusters would be targeted, no simulation:
 python bo_collect.py --data workspace/moe_ws --metrics metrics.csv --dry-run
@@ -53,7 +64,8 @@ from torch.utils.data import DataLoader, TensorDataset
 ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(ROOT / "DataPipeline"))
 
-from dp_config import INPUT_COLS, OUTPUT_COLS, MIN_N, MAX_N, MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT
+from dp_config import INPUT_COLS, OUTPUT_COLS, CONF_THRESHOLD, MIN_N, MAX_N, MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT
+from moe_utils import build_phi
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s")
@@ -187,6 +199,138 @@ def _sample_in_box(box: dict, n: int, rng: np.random.Generator) -> np.ndarray:
     return np.column_stack([n_v, e_v, s_v, w_v, h_v])
 
 
+def _lhs_in_box(box: dict, n: int, rng: np.random.Generator) -> np.ndarray:
+    """Latin Hypercube Sample n points in cluster bounding box.
+    η and σ_y are sampled log-uniformly; n, W, H linearly."""
+    from scipy.stats.qmc import LatinHypercube
+    lhs = LatinHypercube(d=5, seed=rng)
+    u = lhs.random(n)  # (n, 5) in [0,1]^5
+
+    lo_n,  hi_n  = box.get("n",       [MIN_N,    MAX_N])
+    lo_e,  hi_e  = box.get("eta",     [0.001,    300.0])
+    lo_s,  hi_s  = box.get("sigma_y", [0.1,      400.0])
+    lo_w,  hi_w  = box.get("width",   [MIN_WIDTH, MAX_WIDTH])
+    lo_h,  hi_h  = box.get("height",  [MIN_HEIGHT, MAX_HEIGHT])
+
+    n_v  = lo_n + u[:, 0] * (hi_n - lo_n)
+    e_v  = np.exp(np.log(max(lo_e, 1e-9)) + u[:, 1] * (np.log(hi_e) - np.log(max(lo_e, 1e-9))))
+    s_v  = np.exp(np.log(max(lo_s, 1e-9)) + u[:, 2] * (np.log(hi_s) - np.log(max(lo_s, 1e-9))))
+    w_v  = lo_w + u[:, 3] * (hi_w - lo_w)
+    h_v  = lo_h + u[:, 4] * (hi_h - lo_h)
+    return np.column_stack([n_v, e_v, s_v, w_v, h_v])
+
+
+def lhs_collect_cluster(
+    cid: int,
+    box: dict,
+    data_dir: Path,
+    sim,
+    gmm_gate: dict,
+    n_collect: int,
+    rng: np.random.Generator = None,
+):
+    """LHS data collection with GMM filter for one cluster.
+
+    Samples uniformly in the bounding box, runs MPM, then assigns each
+    point via the GMM gating network.  Only points assigned to the target
+    cluster are counted; others go to their GMM-assigned cluster as bonus.
+    """
+    import joblib
+    if rng is None:
+        rng = np.random.default_rng()
+
+    gmm     = gmm_gate["gmm"]
+    scaler  = gmm_gate["scaler"]
+
+    out_csv = data_dir / f"cluster{cid}_lhs.csv"
+    if not out_csv.exists():
+        pd.DataFrame(columns=INPUT_COLS + OUTPUT_COLS + ["cluster_id", "cluster_conf"]).to_csv(out_csv, index=False)
+
+    # Track per-cluster bonus CSVs
+    bonus_csvs = {}
+
+    collected_target = 0
+    collected_total  = 0
+    sim_failures     = 0
+    t0 = time.time()
+
+    # Over-sample ratio: generate batches, expect ~40-70% hit rate
+    BATCH = min(n_collect, 50)
+
+    while collected_target < n_collect:
+        # Generate a batch of LHS points
+        batch_size = min(BATCH, max(n_collect - collected_target, 10) * 2)
+        cands = _lhs_in_box(box, batch_size, rng)
+
+        for i in range(len(cands)):
+            if collected_target >= n_collect:
+                break
+
+            params = cands[i]
+            try:
+                diffs = sim.run(
+                    float(params[0]), float(params[1]), float(params[2]),
+                    float(params[3]), float(params[4]),
+                )
+            except Exception as exc:
+                log.warning(f"    Sim failed: {exc}")
+                sim_failures += 1
+                continue
+
+            diffs = np.clip(diffs, 0.0, None)
+            collected_total += 1
+
+            # GMM assignment
+            phi = build_phi(diffs, W=float(params[3]), H=float(params[4]))
+            phi_scaled = scaler.transform(phi)
+            prob = gmm.predict_proba(phi_scaled)
+            assigned_cid = int(np.argmax(prob, axis=1)[0]) + 1  # 1-indexed
+            conf = float(np.max(prob, axis=1)[0])
+
+            row_data = list(params) + list(diffs) + [assigned_cid, conf]
+            row_cols = INPUT_COLS + OUTPUT_COLS + ["cluster_id", "cluster_conf"]
+            row = pd.DataFrame([row_data], columns=row_cols)
+
+            if assigned_cid == cid and conf >= CONF_THRESHOLD:
+                # Target cluster hit
+                row.to_csv(out_csv, mode="a", header=False, index=False)
+                collected_target += 1
+            else:
+                # Bonus: goes to its GMM-assigned cluster
+                if conf >= CONF_THRESHOLD:
+                    bonus_key = assigned_cid
+                    if bonus_key not in bonus_csvs:
+                        bonus_path = data_dir / f"cluster{bonus_key}_lhs_bonus.csv"
+                        if not bonus_path.exists():
+                            pd.DataFrame(columns=row_cols).to_csv(bonus_path, index=False)
+                        bonus_csvs[bonus_key] = bonus_path
+                    row.to_csv(bonus_csvs[bonus_key], mode="a", header=False, index=False)
+
+            # Progress log
+            if collected_total % 10 == 0:
+                elapsed = time.time() - t0
+                rate    = collected_total / max(elapsed, 1)
+                hit_pct = collected_target / max(collected_total, 1) * 100
+                eta_s   = (n_collect - collected_target) / max(collected_target / max(elapsed, 1), 1e-6)
+                log.info(f"    [{collected_target:>4}/{n_collect}] simulated={collected_total} "
+                         f"hit={hit_pct:.0f}% rate={rate:.2f}/s ETA={eta_s/60:.1f}min")
+
+    elapsed = time.time() - t0
+    hit_pct = collected_target / max(collected_total, 1) * 100
+    log.info(f"  Cluster {cid}: {collected_target} target + "
+             f"{collected_total - collected_target} bonus from {collected_total} sims "
+             f"(hit={hit_pct:.0f}%, fails={sim_failures}) in {elapsed/60:.1f}min")
+
+    # Report bonus counts
+    for bcid, bp in sorted(bonus_csvs.items()):
+        n_bonus = len(pd.read_csv(bp)) - 1  # minus header if re-read
+        try:
+            n_bonus = sum(1 for _ in open(bp)) - 1
+        except:
+            pass
+        log.info(f"    Bonus → cluster {bcid}: {n_bonus} points ({bp.name})")
+
+
 def bo_collect_cluster(
     cid: int,
     box: dict,
@@ -301,8 +445,11 @@ def main():
                         help="Number of new simulation points per cluster (default: 200)")
     parser.add_argument("--n-candidates",  type=int, default=2000,
                         help="Candidate pool size for each BO step (default: 2000)")
+    parser.add_argument("--mode", choices=["bo", "lhs"], default="lhs",
+                        help="Acquisition mode: 'lhs' (LHS + GMM filter, recommended) "
+                             "or 'bo' (variance-based, legacy). Default: lhs")
     parser.add_argument("--surrogate-epochs", type=int, default=200,
-                        help="SVGP training epochs (default: 200)")
+                        help="SVGP training epochs for BO mode (default: 200)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true",
                         help="Print which clusters would be targeted and exit")
@@ -402,7 +549,18 @@ def main():
     sim = _Sim()
     log.info("Simulator ready.")
 
-    # ── Run BO per bad cluster ─────────────────────────────────────────────
+    # ── Load GMM gate (needed for LHS mode) ───────────────────────────────
+    gmm_gate = None
+    if args.mode == "lhs":
+        import joblib
+        gmm_path = data_dir / "gmm_gate.joblib"
+        if not gmm_path.exists():
+            log.error(f"gmm_gate.joblib not found in {data_dir} — required for LHS mode")
+            sys.exit(1)
+        gmm_gate = joblib.load(gmm_path)
+        log.info(f"Loaded GMM gate (K={gmm_gate['k']})")
+
+    # ── Run collection per cluster ─────────────────────────────────────────
     for cid in target_ids:
         box = boxes.get(str(cid))
         if box is None:
@@ -410,56 +568,92 @@ def main():
             continue
 
         log.info(f"\n{'='*55}")
-        log.info(f"  Cluster {cid}  box={box}")
+        log.info(f"  Cluster {cid}  box={box}  mode={args.mode}")
         log.info(f"{'='*55}")
 
-        train_csv = data_dir / f"cluster{cid}_train.csv"
-        out_csv   = data_dir / f"cluster{cid}_bo.csv"
+        if args.mode == "lhs":
+            lhs_collect_cluster(
+                cid       = cid,
+                box       = box,
+                data_dir  = data_dir,
+                sim       = sim,
+                gmm_gate  = gmm_gate,
+                n_collect = args.n_per_cluster,
+                rng       = rng,
+            )
+        else:
+            train_csv = data_dir / f"cluster{cid}_train.csv"
+            out_csv   = data_dir / f"cluster{cid}_bo.csv"
+            bo_collect_cluster(
+                cid         = cid,
+                box         = box,
+                train_csv   = train_csv,
+                out_csv     = out_csv,
+                sim         = sim,
+                n_collect   = args.n_per_cluster,
+                n_candidates= args.n_candidates,
+                surrogate_epochs=args.surrogate_epochs,
+                rng         = rng,
+            )
 
-        bo_collect_cluster(
-            cid         = cid,
-            box         = box,
-            train_csv   = train_csv,
-            out_csv     = out_csv,
-            sim         = sim,
-            n_collect   = args.n_per_cluster,
-            n_candidates= args.n_candidates,
-            surrogate_epochs=args.surrogate_epochs,
-            rng         = rng,
-        )
-
-    log.info("\n=== BO collection done ===")
-    log.info("Next step — retrain only targeted clusters:")
+    log.info(f"\n=== Collection done (mode={args.mode}) ===")
     ids_str = " ".join(str(c) for c in target_ids)
+
+    # ── Merge collected data into cluster train CSVs ──────────────────────
+    log.info("\nMerging collected data into cluster train CSVs:")
+    affected_clusters = set()
+
+    for cid in target_ids:
+        # Merge LHS target data
+        for suffix in ["_lhs.csv", "_bo.csv"]:
+            src = data_dir / f"cluster{cid}{suffix}"
+            train_csv = data_dir / f"cluster{cid}_train.csv"
+            if src.exists() and train_csv.exists():
+                df_old = pd.read_csv(train_csv)
+                df_new_data = pd.read_csv(src)
+                if len(df_new_data) == 0:
+                    src.unlink()
+                    continue
+                # Ensure cluster_id and cluster_conf are set
+                if "cluster_id" not in df_new_data.columns:
+                    df_new_data["cluster_id"] = cid
+                if "cluster_conf" not in df_new_data.columns:
+                    df_new_data["cluster_conf"] = 1.0
+                df_new_data.loc[df_new_data["cluster_id"].isna(), "cluster_id"] = cid
+                df_new_data["cluster_id"] = df_new_data["cluster_id"].astype(int)
+                df_new_data.loc[df_new_data["cluster_conf"].isna(), "cluster_conf"] = 1.0
+                df_merged = pd.concat([df_old, df_new_data], ignore_index=True)
+                df_merged.to_csv(train_csv, index=False)
+                log.info(f"  Cluster {cid}: {len(df_old)} + {len(df_new_data)} → {len(df_merged)} rows ({suffix})")
+                src.unlink()
+                affected_clusters.add(cid)
+
+    # Merge bonus data from LHS mode (points GMM assigned to other clusters)
+    for bonus_csv in sorted(data_dir.glob("cluster*_lhs_bonus.csv")):
+        # Extract cluster id from filename
+        stem = bonus_csv.stem  # e.g. "cluster42_lhs_bonus"
+        try:
+            bcid = int(stem.split("cluster")[1].split("_")[0])
+        except (IndexError, ValueError):
+            continue
+        train_csv = data_dir / f"cluster{bcid}_train.csv"
+        if train_csv.exists():
+            df_old = pd.read_csv(train_csv)
+            df_bonus = pd.read_csv(bonus_csv)
+            if len(df_bonus) == 0:
+                bonus_csv.unlink()
+                continue
+            df_merged = pd.concat([df_old, df_bonus], ignore_index=True)
+            df_merged.to_csv(train_csv, index=False)
+            log.info(f"  Cluster {bcid} (bonus): {len(df_old)} + {len(df_bonus)} → {len(df_merged)} rows")
+            affected_clusters.add(bcid)
+        bonus_csv.unlink()
+
+    all_ids = sorted(affected_clusters)
+    ids_str = " ".join(str(c) for c in all_ids)
+    log.info(f"\nMerge done. Retrain with:")
     log.info(f"  python DataPipeline/train_experts.py --data {data_dir} "
              f"--clusters {ids_str} --force")
-
-    # Optionally merge bo CSVs into cluster train CSVs automatically
-    log.info("\nTo merge BO data into cluster train CSVs before retraining:")
-    for cid in target_ids:
-        bo_csv    = data_dir / f"cluster{cid}_bo.csv"
-        train_csv = data_dir / f"cluster{cid}_train.csv"
-        if bo_csv.exists() and train_csv.exists():
-            df_old = pd.read_csv(train_csv)
-            df_bo  = pd.read_csv(bo_csv)
-            # BO points are targeted to this cluster — fill missing labels so
-            # train_experts.py's cluster_conf>=CONF_THRESHOLD filter keeps them.
-            if "cluster_id" in df_old.columns and "cluster_id" not in df_bo.columns:
-                df_bo["cluster_id"] = cid
-            if "cluster_conf" in df_old.columns and "cluster_conf" not in df_bo.columns:
-                df_bo["cluster_conf"] = 1.0
-            df_new = pd.concat([df_old, df_bo], ignore_index=True)
-            # Fill any remaining NaN in these two columns (older BO CSVs)
-            if "cluster_id" in df_new.columns:
-                df_new.loc[df_new["cluster_id"].isna(), "cluster_id"] = cid
-                df_new["cluster_id"] = df_new["cluster_id"].astype(int)
-            if "cluster_conf" in df_new.columns:
-                df_new.loc[df_new["cluster_conf"].isna(), "cluster_conf"] = 1.0
-            df_new.to_csv(train_csv, index=False)
-            log.info(f"  Cluster {cid}: {len(df_old)} + {len(df_bo)} → {len(df_new)} rows")
-            bo_csv.unlink()   # remove tmp file after merge
-
-    log.info("Merge done. Run train_experts.py --clusters to retrain.")
 
 
 if __name__ == "__main__":
