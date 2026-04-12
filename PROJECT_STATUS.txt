@@ -1,0 +1,218 @@
+================================================================================
+ViRheometry Project Status — 2026-04-12
+Handoff from macOS (M-series, Taichi Metal) → Windows (CUDA)
+================================================================================
+
+1. PROJECT OVERVIEW
+===================
+ViRheometry: estimate Herschel-Bulkley (HB) rheology parameters from video of
+dam-break flow. Parameters: n (power-law index), η (viscosity), σ_y (yield stress).
+
+Pipeline:
+  Video → Calibration (flow distances) → MoE Surrogate → CMA-ES Optimization
+
+Surrogate: Mixture-of-Experts (MoE)
+  - GMM gating network (K=100 clusters, diag covariance) on 18-dim φ features
+  - Per-cluster GP expert: ExactGP (Matérn 2.5 + Linear kernel) on 5D input
+    → 8D output (flow distances at frames 1-8)
+  - Input: (n, η, σ_y, W, H)  Output: (x_01, ..., x_08) flow distances in cm
+
+Ground truth for validation:
+  n=0.5297, η=33.28, σ_y=40.57 (Tonkatsu sauce)
+
+
+2. WHAT WAS DONE (this session, macOS)
+=======================================
+
+a) Multi-setup optimization pipeline
+   - optimize_2setups.py: enhanced to auto-generate Setup 3 data dir + settings.xml
+   - optimize_3setups.py: NEW, takes 3 setups → recommends Setup 4 via orthogonality
+   - Both use CMA-ES with log-barrier + prior regularization
+
+b) Synthetic GT validation (3 setups)
+   - Setup 1: W=3.5, H=6.7 (ref_Tonkatsu_6.7_3.5_1)
+   - Setup 2: W=3.4, H=2.0 (ref_Tonkatsu_2.0_3.4_2)
+   - Setup 3: W=7.0, H=7.0 (ref_Tonkatsu_7.0_7.0_3)
+   - GT flow distances generated via MPM simulation
+
+   3-setup optimization result (pre-BO baseline):
+     inferred: n=0.6537, η=18.27, σ_y=88.73
+     GT:       n=0.5297, η=33.28, σ_y=40.57
+     → not great, root cause = GP surrogate error in queried clusters
+
+c) BO data collection ATTEMPT (failed — important lesson)
+   - Collected 600+ points using max-variance acquisition per cluster
+   - PROBLEM 1: BO points bypassed GMM gating → forced into target cluster
+     → data from different flow regimes mixed into wrong expert → GP degraded
+   - PROBLEM 2: max-variance selects cluster-box edge points with extreme
+     flow distances (2-3x val range) → GP hyperparameters pulled away from
+     useful region
+   - RESULT: all 4 clusters got WORSE (MaxErr increased 50-225%)
+   - SOLUTION: rolled back to pre-BO baseline, rewrote bo_collect.py
+
+d) bo_collect.py REWRITE (committed, ready to use)
+   - NEW --mode lhs (default): Latin Hypercube Sampling + GMM filter
+   - Flow: sample in cluster box → MPM simulate → build φ → GMM.predict()
+     → only keep points GMM assigns to target cluster with conf >= 0.6
+     → bonus points go to their GMM-assigned cluster
+   - OLD --mode bo: variance-based (legacy, not recommended)
+   - This ensures data consistency with the MoE gating network
+
+e) Bug fixes committed:
+   - bo_collect.py merge logic: fill cluster_id/cluster_conf for new rows
+   - optimize_2setups.py: auto-gen setup3 data dir
+
+
+3. CURRENT STATE OF THE CODE
+=============================
+
+All committed on branch: main (latest commit: 8efba28)
+Key files:
+  DataPipeline/
+    bo_collect.py        — data collection (LHS+GMM mode ready, untested on CUDA)
+    prepare_data.py      — GMM training + cluster assignment
+    train_experts.py     — per-cluster GP training
+    evaluate_experts.py  — val/test metrics
+    dp_config.py         — shared constants (CONF_THRESHOLD=0.6, etc.)
+    moe_utils.py         — build_phi(), load_expert(), etc.
+  Optimization/
+    optimize_2setups.py  — 2-setup CMA-ES → recommend Setup 3
+    optimize_3setups.py  — 3-setup CMA-ES → recommend Setup 4
+    moe_workspace5/      — current MoE workspace (pre-BO baseline)
+      gmm_gate.joblib    — trained GMM gating network
+      boxes.json         — per-cluster bounding boxes
+      cluster{N}_train.csv / cluster{N}_val.csv
+      expert_{N}.pt      — trained GP checkpoints
+  Simulation/
+    main.py              — MPM simulation runner
+    config/setting.xml   — base simulation config
+  Calibration/
+    step1.py, step2.py   — camera calibration + flow distance extraction
+
+MoE workspace (Optimization/moe_workspace5/):
+  - 100 clusters (GMM K=100)
+  - Pre-BO baseline (clean, not corrupted)
+  - Cluster sizes range from ~85 to ~275 (train set)
+
+
+4. KNOWN PROBLEMS
+=================
+
+a) GP surrogate accuracy — THE main bottleneck
+   9 clusters have val MaxErr > 1.0 cm (out of 100):
+     cluster  51: MaxErr=5.787 cm (WORST, only ~150 train points)
+     cluster  52: MaxErr=3.887 cm
+     cluster  16: MaxErr=2.719 cm
+     cluster  64: MaxErr=2.592 cm
+     cluster   5: MaxErr=2.106 cm
+     cluster  46: MaxErr=2.078 cm
+     cluster  76: MaxErr=1.473 cm
+     cluster  88: MaxErr=1.369 cm
+     cluster  71: MaxErr=1.080 cm
+
+   21 clusters have MaxErr > 0.5 cm
+   42 clusters have MaxErr < 0.1 cm (good)
+   Median MaxErr across all clusters: 0.155 cm
+
+b) CMA-ES optimization path hits clusters 3, 21, 61, 88 for GT params
+   → these clusters' errors directly affect parameter recovery
+
+c) Simulation can hang on extreme parameters (taichi kernel deadlock)
+   → observed during BO on macOS Metal; may not occur on CUDA
+
+d) sklearn version mismatch warning when loading gmm_gate.joblib
+   (saved with 1.7.2, loaded with 1.6.1) — functionally OK but verify on
+   your Windows environment. If it errors, retrain GMM:
+     python DataPipeline/prepare_data.py --data Optimization/moe_workspace5 --force
+
+e) Known code issues (intentionally unfixed):
+   - is_inner_of_box reset bug in Simulation
+   - h=0.05 hardcode vs py_particle_hl=0.0315 mismatch
+
+
+5. WHAT TO DO NEXT (on Windows CUDA)
+=====================================
+
+Priority 1: Supplement MoE data via LHS+GMM (CUDA will be much faster)
+------------------------------------------------------------------------
+# Target all clusters with MaxErr > 1.0 cm (9 clusters)
+# n-per-cluster=200 means 200 points that PASS the GMM filter per cluster
+# Actual simulations will be more (expect ~40-70% GMM hit rate)
+
+python DataPipeline/bo_collect.py --data Optimization/moe_workspace5 \
+  --clusters 51 52 16 64 5 46 76 88 71 \
+  --n-per-cluster 200 --mode lhs
+
+# Then for the optimization-path clusters (if not already above):
+python DataPipeline/bo_collect.py --data Optimization/moe_workspace5 \
+  --clusters 3 21 61 \
+  --n-per-cluster 200 --mode lhs
+
+# Note: bo_collect.py auto-merges into cluster train CSVs at the end
+# Bonus points go to other clusters automatically
+
+Priority 2: Retrain affected experts
+--------------------------------------
+python DataPipeline/train_experts.py --data Optimization/moe_workspace5 \
+  --clusters 51 52 16 64 5 46 76 88 71 3 21 61 --force
+
+Priority 3: Evaluate improvement
+----------------------------------
+python DataPipeline/evaluate_experts.py --data Optimization/moe_workspace5 --mode val
+
+# Compare MaxErr before/after. Target: all clusters < 0.5 cm
+
+Priority 4: Re-run optimization with improved MoE
+---------------------------------------------------
+python Optimization/optimize_3setups.py \
+  -W1 3.5 -H1 6.7 \
+  -dis1 0.9934375 3.332692 5.793578 7.843668 8.983648 9.338487 9.403675 9.424664 \
+  -W2 3.4 -H2 2.0 \
+  -dis2 0.70626307 1.8434453 2.5627532 2.9179034 3.1175337 3.2430563 3.3375454 3.413351 \
+  -W3 7.0 -H3 7.0 \
+  -dis3 1.0464225 3.8134809 6.73189 9.052673 10.41106 10.939348 11.133526 11.244328 \
+  --moe_dir Optimization/moe_workspace5 \
+  --material_name Tonkatsu --topk 2
+
+# Compare inferred (n, η, σ_y) vs GT (0.5297, 33.28, 40.57)
+
+Priority 5: If improvement is insufficient
+--------------------------------------------
+- Consider adding more data per cluster (up to N~2000 for ExactGP)
+- For clusters with N>2000, train_experts.py auto-switches to SVGP
+- Could also try: increase GP training epochs (--epochs 1000),
+  or experiment with different kernels in train_experts.py
+
+
+6. REFERENCE: GT FLOW DISTANCES
+================================
+These are the synthetic GT flow distances used for optimization validation:
+
+Setup 1 (W=3.5, H=6.7):
+  0.9934375 3.332692 5.793578 7.843668 8.983648 9.338487 9.403675 9.424664
+
+Setup 2 (W=3.4, H=2.0):
+  0.70626307 1.8434453 2.5627532 2.9179034 3.1175337 3.2430563 3.3375454 3.413351
+
+Setup 3 (W=7.0, H=7.0):
+  1.0464225 3.8134809 6.73189 9.052673 10.41106 10.939348 11.133526 11.244328
+
+GT parameters: n=0.5297, η=33.28, σ_y=40.57
+
+
+7. DEPENDENCY NOTES FOR WINDOWS
+================================
+- Python 3.9+
+- PyTorch (CUDA version)
+- GPyTorch, scikit-learn, pandas, numpy, scipy
+- Taichi (pip install taichi, should auto-detect CUDA)
+- joblib (for GMM loading)
+- CMA (pip install cma) for optimization
+
+Make sure taichi initializes with CUDA:
+  import taichi as ti
+  ti.init(arch=ti.gpu)  # should use CUDA on Windows
+
+The bo_collect.py already uses:
+  os.environ["TAICHI_HEADLESS"] = "1"  # no GUI needed for data collection
+================================================================================
