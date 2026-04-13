@@ -194,13 +194,17 @@ def main():
 
     # ── CMA-ES ────────────────────────────────────────────────────────────────
     print(f"\n--- Optimization Start (popsize={args.popsize}) ---")
-    theta_best, loss_best, hist = run_cmaes(
+    theta_best, loss_best, hist, iter_times = run_cmaes(
         loss_fn, bounds,
         sigma0=args.sigma0, popsize=args.popsize,
         maxiter=args.maxiter, seed=args.seed, verb_disp=args.verb,
+        record_iter_times=True,
     )
     n_best, eta_best, sigma_best = theta_best
-    print(f"Best: n={n_best:.6f}  eta={eta_best:.6f}  sigma_y={sigma_best:.6f}  loss={loss_best:.6e}")
+    print(f"\n{'='*60}")
+    print(f"Best:  n={n_best:.6f}  η={eta_best:.6f}  σ_y={sigma_best:.6f}")
+    print(f"Loss:  {loss_best:.6e}")
+    print(f"{'='*60}")
 
     # ── Save results ──────────────────────────────────────────────────────────
     np.savetxt(os.path.join(save_dir, "setup1_best_x_n_eta_sigma.txt"),
@@ -212,10 +216,16 @@ def main():
         w.writerow(["Iteration", "Loss"])
         w.writerows(enumerate(hist))
 
+    with open(os.path.join(save_dir, "iteration_times.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["Iteration", "Duration_Seconds"])
+        for i, t in enumerate(iter_times):
+            w.writerow([i + 1, f"{t:.4f}"])
+
     plt.figure()
     plt.plot(hist)
     plt.yscale("log")
-    plt.title("Convergence")
+    plt.title("Convergence (1-setup)")
     plt.xlabel("Iteration")
     plt.ylabel("Best Loss")
     plt.savefig(os.path.join(save_dir, "best_loss_convergence.png"))

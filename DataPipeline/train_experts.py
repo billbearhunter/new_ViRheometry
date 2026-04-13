@@ -56,10 +56,13 @@ from dp_config import (
     CONF_THRESHOLD,
 )
 from moe_utils import (
-    DEVICE, DTYPE,
+    DEVICE,
     SingleOutputExactGP, SingleOutputSVGP,
     LogStandardInputScaler, TargetScaler,
 )
+
+# Will be set by main() from --dtype flag or moe_utils default
+DTYPE = None
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s")
@@ -263,25 +266,27 @@ def train_expert(train_csv: Path, val_csv: Path, out_pt: Path):
             models, likes, xs, ys, X_tr_s, Y_tr_s, X_val_s, Y_val_s
         )
 
+    # Move state_dicts to CPU before saving to avoid GPU references in state dict
     state = {
         "gp_kind":      gp_kind,
-        "models":       [m.state_dict() for m in models],
-        "likes":        [l.state_dict() for l in likes],
+        "models":       [{k: v.cpu() for k, v in m.state_dict().items()} for m in models],
+        "likes":        [{k: v.cpu() for k, v in l.state_dict().items()} for l in likes],
         "x_scaler":     xs.to_dict(),
         "y_scaler":     ys.to_dict(),
-        "train_x":      train_x_save,
-        "train_y":      train_y_save,
+        "train_x":      train_x_save.cpu() if train_x_save is not None else None,
+        "train_y":      train_y_save.cpu() if train_y_save is not None else None,
         "inducing":     inducing_points,
         "poly_residual": poly_state,
     }
     torch.save(state, out_pt)
     log.info(f"    Saved → {out_pt}")
 
-    # Free GPU memory after saving
-    del models, likes, X_t, Y_t
+    # Free ALL GPU memory: models, likelihoods, tensors, and the state dict
+    del models, likes, X_t, Y_t, state
     if train_x_save is not None:
         del train_x_save, train_y_save
     torch.cuda.empty_cache()
+    log.info(f"    GPU memory freed (torch.cuda.empty_cache)")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -298,7 +303,21 @@ def main():
                         help="Train only these cluster IDs (default: all)")
     parser.add_argument("--force",    action="store_true",
                         help="Retrain even if .pt already exists")
+    parser.add_argument("--dtype",   type=str, default=None,
+                        choices=["float32", "float64"],
+                        help="Override training dtype (default: use moe_utils.DTYPE)")
     args = parser.parse_args()
+
+    # Set global DTYPE from flag or moe_utils default
+    global DTYPE
+    if args.dtype == "float64":
+        DTYPE = torch.float64
+    elif args.dtype == "float32":
+        DTYPE = torch.float32
+    else:
+        from moe_utils import DTYPE as _DEFAULT_DTYPE
+        DTYPE = _DEFAULT_DTYPE
+    log.info(f"Training dtype: {DTYPE}")
 
     data_dir = Path(args.data)
     pattern  = sorted(data_dir.glob("cluster*_train.csv"))

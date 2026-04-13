@@ -173,17 +173,20 @@ def main():
     bounds  = GLOBAL_BOUNDS.copy()
     theta_0 = default_x0(bounds)
 
+    prior_loaded = False
     if args.setup1_dir:
         prior_path = os.path.join(args.setup1_dir, "setup1_best_x_n_eta_sigma.txt")
         if os.path.exists(prior_path):
             try:
                 theta_0 = list(np.loadtxt(prior_path))
                 print(f"[Info] Loaded Setup 1 prior: n={theta_0[0]:.4f}  eta={theta_0[1]:.4f}  sigma_y={theta_0[2]:.4f}")
+                prior_loaded = True
             except Exception as e:
                 print(f"[ERROR] Failed to load prior: {e}")
         else:
             print(f"[ERROR] Setup 1 file not found: {prior_path}")
     else:
+        prior_loaded = False
         print("\n" + "!" * 40)
         print("[WARNING] No --setup1_dir given. Starting from global center.")
         print("!" * 40 + "\n")
@@ -192,7 +195,7 @@ def main():
     scale_n       = MAX_N - MIN_N
     scale_log_eta = math.log(MAX_ETA) - math.log(MIN_ETA)
     scale_log_sig = math.log(MAX_SIGMA_Y) - math.log(max(MIN_SIGMA_Y, 1e-6))
-    LAMBDA_REG    = 0.05
+    LAMBDA_REG    = 0.05 if prior_loaded else 0.001
     BARRIER_WT    = 0.001
 
     local_scale = {}
@@ -279,7 +282,13 @@ def main():
         seed=args.seed, verb_disp=args.verb,
         record_iter_times=True,
     )
-    print(f"Best: {theta_best}  loss={loss_best:.6e}")
+    n_best, eta_best, sigma_best = theta_best
+    print(f"\n{'='*60}")
+    print(f"Best:  n={n_best:.6f}  η={eta_best:.6f}  σ_y={sigma_best:.6f}")
+    print(f"Loss:  {loss_best:.6e}")
+    if prior_loaded:
+        print(f"Prior: n={theta_0[0]:.6f}  η={theta_0[1]:.6f}  σ_y={theta_0[2]:.6f}")
+    print(f"{'='*60}")
 
     # ── Save results ──────────────────────────────────────────────────────────
     np.savetxt(os.path.join(save_dir, "setup2_best_x_n_eta_sigma.txt"),
@@ -295,6 +304,15 @@ def main():
         w.writerow(["Iteration", "Duration_Seconds"])
         for i, t in enumerate(iter_times):
             w.writerow([i + 1, f"{t:.4f}"])
+
+    plt.figure()
+    plt.plot(hist)
+    plt.yscale("log")
+    plt.title("Convergence (2-setup)")
+    plt.xlabel("Iteration")
+    plt.ylabel("Best Loss")
+    plt.savefig(os.path.join(save_dir, "best_loss_convergence.png"))
+    plt.close()
 
     # ── Recommend Setup 3 ─────────────────────────────────────────────────────
     try:

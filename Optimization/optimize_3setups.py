@@ -215,7 +215,7 @@ def main():
     scale_n       = MAX_N - MIN_N
     scale_log_eta = math.log(MAX_ETA) - math.log(MIN_ETA)
     scale_log_sig = math.log(MAX_SIGMA_Y) - math.log(max(MIN_SIGMA_Y, 1e-6))
-    LAMBDA_REG    = 0.05
+    LAMBDA_REG    = 0.05 if prior_loaded else 0.001  # weak reg when no prior
     BARRIER_WT    = 0.001
 
     local_scale = {}
@@ -302,7 +302,13 @@ def main():
         seed=args.seed, verb_disp=args.verb,
         record_iter_times=True,
     )
-    print(f"Best: {theta_best}  loss={loss_best:.6e}")
+    n_best, eta_best, sigma_best = theta_best
+    print(f"\n{'='*60}")
+    print(f"Best:  n={n_best:.6f}  η={eta_best:.6f}  σ_y={sigma_best:.6f}")
+    print(f"Loss:  {loss_best:.6e}")
+    if prior_loaded:
+        print(f"Prior: n={theta_0[0]:.6f}  η={theta_0[1]:.6f}  σ_y={theta_0[2]:.6f}")
+    print(f"{'='*60}")
 
     # ── Save results ──────────────────────────────────────────────────────────
     np.savetxt(os.path.join(save_dir, "setup3_best_x_n_eta_sigma.txt"),
@@ -318,6 +324,15 @@ def main():
         w.writerow(["Iteration", "Duration_Seconds"])
         for i, t in enumerate(iter_times):
             w.writerow([i + 1, f"{t:.4f}"])
+
+    plt.figure()
+    plt.plot(hist)
+    plt.yscale("log")
+    plt.title("Convergence (3-setup)")
+    plt.xlabel("Iteration")
+    plt.ylabel("Best Loss")
+    plt.savefig(os.path.join(save_dir, "best_loss_convergence.png"))
+    plt.close()
 
     # ── Recommend Setup 4 ─────────────────────────────────────────────────────
     try:

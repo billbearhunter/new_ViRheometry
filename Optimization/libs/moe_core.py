@@ -43,7 +43,7 @@ GLOBAL_BOUNDS = {
     "eta":     (MIN_ETA,     MAX_ETA),
     "sigma_y": (MIN_SIGMA_Y, MAX_SIGMA_Y),
 }
-DTYPE = torch.float64
+DTYPE = torch.float32   # match training dtype; overridden per-expert in load_expert_bundle
 
 
 # ── GP model definitions ───────────────────────────────────────────────────────
@@ -145,7 +145,8 @@ def get_adaptive_weights(
     elif strategy == "topk":
         k = topk_hard if topk_hard is not None else 2
         expert_indices = np.argsort(-probs)[:k]
-        weights = np.ones(len(expert_indices)) / len(expert_indices)
+        top_probs = probs[expert_indices]
+        weights = top_probs / np.sum(top_probs)  # probability-weighted
 
     elif strategy == "threshold":
         mask = probs >= threshold
@@ -224,11 +225,15 @@ def predict_expert_batch(
         vals[:, j] = np.log(np.clip(vals[:, j] + bundle.log_eps, 1e-12, None))
     # Keep scaled inputs for poly residual (in numpy)
     vals_scaled = (vals - bundle.x_mean.cpu().numpy()) / bundle.x_scale.cpu().numpy()
-    xt = torch.tensor(vals_scaled, dtype=DTYPE, device=device)
+    # Use the bundle's actual dtype (detected from checkpoint)
+    bundle_dtype = bundle.x_mean.dtype
+    xt = torch.tensor(vals_scaled, dtype=bundle_dtype, device=device)
 
     # GP mean predictions (scaled space)
+    jitter = 1e-2 if bundle_dtype == torch.float32 else 1e-3
     preds_scaled = []
     with torch.no_grad(), gpytorch.settings.fast_pred_var(), \
+         gpytorch.settings.cholesky_jitter(jitter), \
          gpytorch.settings.max_cg_iterations(1000), \
          gpytorch.settings.cg_tolerance(0.01), \
          gpytorch.settings.max_preconditioner_size(100):
@@ -352,10 +357,24 @@ def load_json(path: str) -> dict:
         return json.load(f)
 
 
+def _detect_ckpt_dtype(ckpt) -> torch.dtype:
+    """Detect the dtype used during training from checkpoint state dicts."""
+    msds = ckpt.get("models", [])
+    if msds:
+        for v in msds[0].values():
+            if torch.is_tensor(v) and v.is_floating_point():
+                return v.dtype
+    tx = ckpt.get("train_x")
+    if tx is not None and torch.is_tensor(tx):
+        return tx.dtype
+    return DTYPE
+
+
 def load_expert_bundle(path: str, device) -> ExpertBundle:
     """Load a trained GP expert from a .pt checkpoint file."""
     ckpt = _safe_torch_load(path, map_location=device)
     cid  = int(ckpt.get("cid", -1))
+    dtype = _detect_ckpt_dtype(ckpt)
 
     def get_v(d, k, alt_k, root, root_k):
         v = None
@@ -364,10 +383,10 @@ def load_expert_bundle(path: str, device) -> ExpertBundle:
         if v is None and root: v = root.get(root_k)
         return v
 
-    def safe_tensor(data, dtype, device):
+    def safe_tensor(data, dt, dev):
         if torch.is_tensor(data):
-            return data.detach().clone().to(dtype=dtype, device=device)
-        return torch.tensor(data, dtype=dtype, device=device)
+            return data.detach().clone().to(dtype=dt, device=dev)
+        return torch.tensor(data, dtype=dt, device=dev)
 
     xs, ys = ckpt.get("x_scaler", {}), ckpt.get("y_scaler", {})
     xm  = get_v(xs, "mean",  "mean_",  ckpt, "X_mean")
@@ -377,10 +396,10 @@ def load_expert_bundle(path: str, device) -> ExpertBundle:
     if xm is None:
         raise ValueError(f"Missing X_mean in {path}")
 
-    x_mean  = safe_tensor(xm,  DTYPE, device).view(1, -1)
-    x_scale = safe_tensor(xsc, DTYPE, device).view(1, -1)
-    y_mean  = safe_tensor(ym,  DTYPE, device).view(1, -1)
-    y_scale = safe_tensor(ysc, DTYPE, device).view(1, -1)
+    x_mean  = safe_tensor(xm,  dtype, device).view(1, -1)
+    x_scale = safe_tensor(xsc, dtype, device).view(1, -1)
+    y_mean  = safe_tensor(ym,  dtype, device).view(1, -1)
+    y_scale = safe_tensor(ysc, dtype, device).view(1, -1)
 
     models, likes = [], []
     msds = ckpt.get("models")
@@ -391,21 +410,21 @@ def load_expert_bundle(path: str, device) -> ExpertBundle:
         inducing = ckpt.get("inducing") or ckpt.get("inducing_points")
 
     if is_exact:
-        tx = safe_tensor(ckpt["train_x"], DTYPE, device)
-        ty = safe_tensor(ckpt["train_y"], DTYPE, device)
+        tx = safe_tensor(ckpt["train_x"], dtype, device)
+        ty = safe_tensor(ckpt["train_y"], dtype, device)
         for i in range(len(msds)):
-            l = gpytorch.likelihoods.GaussianLikelihood().to(device, DTYPE)
+            l = gpytorch.likelihoods.GaussianLikelihood().to(device, dtype)
             l.load_state_dict(lsds[i])
-            m = _OfflineExactGP(tx, ty[:, i], l).to(device, DTYPE)
+            m = _OfflineExactGP(tx, ty[:, i], l).to(device, dtype)
             m.load_state_dict(msds[i])
             m.eval(); l.eval()
             models.append(m); likes.append(l)
     else:
         for i in range(len(msds)):
-            ip = safe_tensor(inducing[i], DTYPE, device)
-            m  = _OfflineSVGPModel(ip).to(device, DTYPE)
+            ip = safe_tensor(inducing[i], dtype, device)
+            m  = _OfflineSVGPModel(ip).to(device, dtype)
             m.load_state_dict(msds[i])
-            l = gpytorch.likelihoods.GaussianLikelihood().to(device, DTYPE)
+            l = gpytorch.likelihoods.GaussianLikelihood().to(device, dtype)
             l.load_state_dict(lsds[i])
             m.eval(); l.eval()
             models.append(m); likes.append(l)
@@ -420,13 +439,29 @@ def load_expert_bundle(path: str, device) -> ExpertBundle:
 
 # ── CMA-ES runner ──────────────────────────────────────────────────────────────
 
+def _to_log_space(theta, bounds):
+    """Transform [n, eta, sigma_y] to [n, log(eta), log(sigma_y)] for CMA-ES."""
+    eta_lo = max(bounds["eta"][0], 1e-9)
+    sig_lo = max(bounds["sigma_y"][0], 1e-9)
+    return [theta[0], math.log(max(theta[1], eta_lo)), math.log(max(theta[2], sig_lo))]
+
+
+def _from_log_space(z, bounds):
+    """Transform [n, log(eta), log(sigma_y)] back to [n, eta, sigma_y]."""
+    return [z[0], math.exp(z[1]), math.exp(z[2])]
+
+
 def run_cmaes(
     batch_loss_fn, bounds,
     x0=None, sigma0=0.5, popsize=16, maxiter=700,
     seed=42, verb_disp=1, record_iter_times=False,
 ):
     """
-    Run CMA-ES optimization.
+    Run CMA-ES optimization in log-space for eta and sigma_y.
+
+    CMA-ES searches in [n, log(eta), log(sigma_y)] space for better
+    coverage of multi-order-of-magnitude parameters. The batch_loss_fn
+    still receives parameters in original space [n, eta, sigma_y].
 
     Parameters
     ----------
@@ -442,9 +477,18 @@ def run_cmaes(
     if x0 is None:
         x0 = default_x0(bounds)
     x0 = clamp_params(x0, bounds)
+
+    # Transform to log-space for CMA-ES
+    z0 = _to_log_space(x0, bounds)
+    eta_lo = max(bounds["eta"][0], 1e-9)
+    sig_lo = max(bounds["sigma_y"][0], 1e-9)
+    log_bounds = [
+        [bounds["n"][0], math.log(eta_lo), math.log(sig_lo)],
+        [bounds["n"][1], math.log(bounds["eta"][1]), math.log(bounds["sigma_y"][1])],
+    ]
+
     opts = {
-        "bounds":        [[bounds[k][0] for k in ["n", "eta", "sigma_y"]],
-                          [bounds[k][1] for k in ["n", "eta", "sigma_y"]]],
+        "bounds":        log_bounds,
         "seed":          seed,
         "popsize":       popsize,
         "verbose":       verb_disp,
@@ -453,23 +497,25 @@ def run_cmaes(
         "tolfun":        1e-20,
         "tolstagnation": maxiter * 2,
     }
-    es           = cma.CMAEvolutionStrategy(x0, sigma0, opts)
+    es           = cma.CMAEvolutionStrategy(z0, sigma0, opts)
     loss_history = []
     iter_times   = []
 
     while not es.stop():
         t0 = time.time()
-        sols         = es.ask()
-        clamped_sols = [clamp_params(s, bounds) for s in sols]
-        losses       = batch_loss_fn(clamped_sols)
-        es.tell(sols, losses)
+        z_sols = es.ask()
+        # Transform back to original space for loss evaluation
+        orig_sols = [clamp_params(_from_log_space(z, bounds), bounds) for z in z_sols]
+        losses    = batch_loss_fn(orig_sols)
+        es.tell(z_sols, losses)
         if verb_disp > 0:
             es.disp()
         loss_history.append(es.result.fbest)
         iter_times.append(time.time() - t0)
 
     res = es.result
-    best = [float(x) for x in res.xbest], float(res.fbest), loss_history
+    theta_best = clamp_params(_from_log_space(res.xbest, bounds), bounds)
+    best = [float(x) for x in theta_best], float(res.fbest), loss_history
     if record_iter_times:
         return (*best, iter_times)
     return best
