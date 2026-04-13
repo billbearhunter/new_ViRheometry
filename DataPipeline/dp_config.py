@@ -18,6 +18,9 @@ MIN_SIGMA_Y, MAX_SIGMA_Y = 0.001, 400.0     # avoid exact 0 for log-sampling
 MIN_WIDTH,   MAX_WIDTH   = 2.0,   7.0
 MIN_HEIGHT,  MAX_HEIGHT  = 2.0,   7.0
 
+# ── Numerical constants ──────────────────────────────────────────────────────
+LOG_EPS = 1e-8    # unified epsilon for all log-transforms (build_phi, scalers, etc.)
+
 PARAM_BOUNDS = {
     "n":       (MIN_N,       MAX_N),
     "eta":     (MIN_ETA,     MAX_ETA),

@@ -1,12 +1,10 @@
 import math
-import numpy as np
 import copy
-import shutil
-from .setup import Setup
-import copy
-import numpy as np
 import sys
 import os
+
+import numpy as np
+from .setup import Setup
 from .const import CGS
 const = CGS
 MAX_ETA, MAX_N, MAX_SIGMA_Y, MIN_ETA, MIN_N, MIN_SIGMA_Y = const.MAX_ETA, const.MAX_N, const.MAX_SIGMA_Y, const.MIN_ETA, const.MIN_N, const.MIN_SIGMA_Y
@@ -39,110 +37,6 @@ class MaterialExtent:
         self.extent_n = copy.deepcopy(extent_n)
         self.extent_sigmaY = copy.deepcopy(extent_sigmaY)
 
-class SimpleMechanism:
-    def __init__(self, const):
-        self.const = const
-
-    def isSetupValid(self, P, L, m):
-        if P*L - m.sigmaY <= 0.0:
-            return False
-        else:
-            return True
-
-    def isSetupValid2(self, P, L, m):
-        eta, n, sigmaY = m.eta, m.n, m.sigmaY
-        l = sigmaY / P
-        W = P * (L - l) / eta
-        if math.isnan(W) or W <= 0.0:
-            return False
-        else:
-            return True
-            
-    def singleLoss(self, m, m_star, P, L): 
-        if not self.isSetupValid(P,L,m) or not self.isSetupValid2(P,L,m):
-            raise InvalidParamException(m)
-
-        eta, n, sigmaY = m.eta, m.n, m.sigmaY
-        eta_star, n_star, sigmaY_star = m_star.eta, m_star.n, m_star.sigmaY
-
-        U1 = n / (n + 1.0)
-        U2 = math.pow(P / eta, 1.0 / n)
-        U3 = math.pow(L - sigmaY / P, (n + 1.0) / n)
-
-        U1_star = n_star / (n_star + 1.0)
-        U2_star = math.pow(P / eta_star, 1.0 / n_star)
-        U3_star = math.pow(L - sigmaY_star / P, (n_star + 1.0) / n_star)
-
-        D_inner_denom = P * L - sigmaY
-        D_pwr = (n + 1.0) / n
-
-        D_star_inner_denom = P*L - sigmaY_star
-        D_star_pwr = (n_star + 1.0) / n_star
-
-        num_intervals = 100
-        dy = L / num_intervals
-        Loss = 0.0
-        for i in range(num_intervals):
-            y = L * (i+0.5) / num_intervals
-
-            D_inner_numer = max(0.0, P * y - sigmaY)
-            D = 1.0 - math.pow(D_inner_numer / D_inner_denom, D_pwr)
-            u = D * U1 * U2 * U3
-
-            D_star_inner_numer = max(0.0, P * y - sigmaY_star)
-            D_star = 1.0 - math.pow(D_star_inner_numer / D_star_inner_denom, D_star_pwr)
-            u_star = D_star * U1_star * U2_star * U3_star
-
-            Loss += (u - u_star) * (u - u_star) * dy
-
-        return Loss
-
-    def singleHessian(self, m, P, L):
-        if not self.isSetupValid(P,L,m) or not self.isSetupValid2(P,L,m):
-            raise InvalidParamException(m)
-        eta, n, sigmaY = m.eta, m.n, m.sigmaY
-
-        l = sigmaY / P
-        W = P * (L - l) / eta
-
-        S        = math.pow(W, (n+1.0)/n) * eta / (P * (n+1.0))
-        A_eta    = -S / eta
-        A_n      = S * (1.0/(n+1.0) - math.log(W) / n)
-        B_n      = S / n
-        A_sigmaY = -math.pow(W, 1.0/n) / P
-
-        C1 = (1.0+n)*(1.0+n) / ((1.0+2.0*n) * (2.0+3.0*n))
-        C2 = n*n*(3.0+5.0*n)*(1.0+n) / ((1.0+2.0*n)*(1.0+2.0*n)*(2.0+3.0*n)*(2.0+3.0*n))
-        C3 = (2.0+3.0*n) / (2.0*(1.0+n)*(1.0+2.0*n))
-        C4 = n*n*n/((2.0+3.0*n)*(2.0+3.0*n)*(2.0+3.0*n))
-        C5 = n*n*(3.0+4.0*n)/(4.0*(1.0+n)*(1.0+n)*(1.0+2.0*n)*(1.0+2.0*n))
-        C6 = 1.0 / ((1.0+n)*(2.0+n))
-
-        H_eta_eta       = 2.0 * A_eta * A_eta * l + 4.0 * A_eta * A_eta * (L-l) * C1
-        H_eta_n         = 2.0 * A_eta * A_n * l + 4.0 * A_eta * A_n * (L-l) * C1 - 2.0 * A_eta * B_n * (L-l) * C2
-        H_eta_sigmaY    = 2.0 * A_eta * A_sigmaY * l + 2.0 * A_eta * A_sigmaY * (L-l) * C3
-        H_n_n           = 2.0 * A_n * A_n * l + 4.0 * B_n * B_n * (L-l) * C4 - 4.0 * A_n * B_n * (L-l) * C2 + 4.0 * A_n * A_n * (L-l) * C1
-        H_n_sigmaY      = 2.0 * A_n * A_sigmaY * l + 2.0 * A_n * A_sigmaY * (L-l) * C3 - 2.0 * B_n * A_sigmaY * (L-l) * C5
-        H_sigmaY_sigmaY = 2.0 * A_sigmaY * A_sigmaY * l + 4.0 * A_sigmaY * A_sigmaY * (L-l) * C6
-
-        return np.matrix([[H_eta_eta, H_eta_n, H_eta_sigmaY],[H_eta_n, H_n_n, H_n_sigmaY],[H_eta_sigmaY, H_n_sigmaY, H_sigmaY_sigmaY]])
-
-    def rescaleHessian(self, Hessian):
-        dm_dmtilde      = np.zeros((3,3))
-        dm_dmtilde[0,0] = self.const.extent_eta[1] - self.const.extent_eta[0]
-        dm_dmtilde[1,1] = self.const.extent_n[1] - self.const.extent_n[0]
-        dm_dmtilde[2,2] = self.const.extent_sigmaY[1] - self.const.extent_sigmaY[0]
-        return dm_dmtilde @ Hessian @ dm_dmtilde.transpose()
-
-    def totalLossPL(self,m,m_star,P,L):
-        loss = 0.0
-        try:
-            loss = self.singleLoss(m, m_star, P, L)
-        except Exception as e:
-            print(str(e))  
-            return float('NaN')
-        return loss
-    
 class Mechanism:
 
     def isSetupValid(self, P, L, m):

@@ -209,9 +209,35 @@ def fit_poly_residual(models, likes, x_scaler, y_scaler,
     return None
 
 
+# ── Differential target transforms ────────────────────────────────────────────
+
+def _to_diff(Y: np.ndarray) -> np.ndarray:
+    """Absolute flow distances → differential increments.
+
+    Y = [y₁, y₂, ..., y₈]   →   D = [y₁, y₂-y₁, y₃-y₂, ..., y₈-y₇]
+
+    Mathematically: D[:, 0] = Y[:, 0],  D[:, k] = Y[:, k] - Y[:, k-1]
+    Inverse: Y = cumsum(D, axis=1)
+    """
+    D = np.empty_like(Y)
+    D[:, 0] = Y[:, 0]
+    D[:, 1:] = np.diff(Y, axis=1)
+    return D
+
+
+def _from_diff(D: np.ndarray) -> np.ndarray:
+    """Differential increments → absolute flow distances.
+
+    Applies physical constraint Dₖ ≥ 0 (monotonic flow) before cumsum.
+    """
+    D_clipped = np.maximum(D, 0.0)
+    return np.cumsum(D_clipped, axis=1)
+
+
 # ── Per-cluster pipeline ───────────────────────────────────────────────────────
 
-def train_expert(train_csv: Path, val_csv: Path, out_pt: Path):
+def train_expert(train_csv: Path, val_csv: Path, out_pt: Path,
+                 diff_target: bool = False):
     log.info(f"\n>>> Cluster: {out_pt.stem}")
 
     df_tr = pd.read_csv(train_csv)
@@ -223,6 +249,12 @@ def train_expert(train_csv: Path, val_csv: Path, out_pt: Path):
 
     X_tr  = df_tr[INPUT_COLS].values
     Y_tr  = df_tr[OUTPUT_COLS].values
+
+    # Differential target encoding: GP predicts increments instead of absolutes
+    target_mode = "diff" if diff_target else "absolute"
+    if diff_target:
+        Y_tr = _to_diff(Y_tr)
+        log.info(f"    [DiffTarget] Y range: [{Y_tr.min():.3f}, {Y_tr.max():.3f}]")
 
     xs = LogStandardInputScaler(log_cols=LOG_INPUTS, all_cols=INPUT_COLS).fit(X_tr)
     ys = TargetScaler().fit(Y_tr)
@@ -239,8 +271,11 @@ def train_expert(train_csv: Path, val_csv: Path, out_pt: Path):
         if "cluster_conf" in df_vl.columns:
             df_vl = df_vl[df_vl["cluster_conf"] >= CONF_THRESHOLD]
         if len(df_vl) > 0:
+            Y_vl = df_vl[OUTPUT_COLS].values
+            if diff_target:
+                Y_vl = _to_diff(Y_vl)
             X_val_s = xs.transform(df_vl[INPUT_COLS].values)
-            Y_val_s = ys.transform(df_vl[OUTPUT_COLS].values)
+            Y_val_s = ys.transform(Y_vl)
 
     t0 = time.time()
     if len(df_tr) <= EXACT_THRESHOLD:
@@ -269,6 +304,7 @@ def train_expert(train_csv: Path, val_csv: Path, out_pt: Path):
     # Move state_dicts to CPU before saving to avoid GPU references in state dict
     state = {
         "gp_kind":      gp_kind,
+        "target_mode":  target_mode,   # "diff" or "absolute"
         "models":       [{k: v.cpu() for k, v in m.state_dict().items()} for m in models],
         "likes":        [{k: v.cpu() for k, v in l.state_dict().items()} for l in likes],
         "x_scaler":     xs.to_dict(),
@@ -306,6 +342,9 @@ def main():
     parser.add_argument("--dtype",   type=str, default=None,
                         choices=["float32", "float64"],
                         help="Override training dtype (default: use moe_utils.DTYPE)")
+    parser.add_argument("--diff-target", action="store_true",
+                        help="Train on differential increments instead of absolute "
+                             "flow distances (D_k = y_k - y_{k-1})")
     args = parser.parse_args()
 
     # Set global DTYPE from flag or moe_utils default
@@ -340,7 +379,7 @@ def main():
             continue
 
         try:
-            train_expert(tr_csv, vl_csv, out_pt)
+            train_expert(tr_csv, vl_csv, out_pt, diff_target=args.diff_target)
         except Exception as exc:
             log.error(f"Cluster {cid} failed: {exc}", exc_info=True)
 

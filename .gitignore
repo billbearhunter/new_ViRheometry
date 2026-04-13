@@ -30,5 +30,8 @@ Optimization/moe_workspace*/val_labeled.csv
 Optimization/moe_workspace*/test_labeled.csv
 Optimization/moe_workspace*_data.csv
 
+# CMA-ES optimization result directories
+result_setup*/
+
 # Claude session files
 .claude/

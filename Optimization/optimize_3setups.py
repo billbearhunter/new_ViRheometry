@@ -167,6 +167,7 @@ def main():
         needed_experts.update(ids)
 
     # ── Load expert models ────────────────────────────────────────────────────
+    moe_boxes = load_json(os.path.join(args.moe_dir, "boxes.json"))
     expert_cache = {}
     print(f"Loading {len(needed_experts)} experts...")
     for cid in needed_experts:
@@ -174,11 +175,24 @@ def main():
             path = os.path.join(args.moe_dir, f"expert_{cid}.pt")
             if os.path.exists(path):
                 expert_cache[cid] = load_expert_bundle(path, device)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Warning] Failed to load expert {cid}: {e}")
+    if not expert_cache:
+        print("[ERROR] No experts loaded successfully! Cannot optimize.")
+        import sys; sys.exit(1)
+
+    # ── Tighten bounds from expert boxes ─────────────────────────────────────
+    bounds = GLOBAL_BOUNDS.copy()
+    for cid in needed_experts:
+        box = moe_boxes.get(str(cid)) or moe_boxes.get(cid)
+        if box:
+            for k in ["n", "eta", "sigma_y"]:
+                lo = max(bounds[k][0], float(box[k][0]))
+                hi = min(bounds[k][1], float(box[k][1]))
+                if lo < hi:
+                    bounds[k] = (lo, hi)
 
     # ── Load initial guess (Setup 2 prior preferred, else Setup 1) ────────────
-    bounds  = GLOBAL_BOUNDS.copy()
     theta_0 = default_x0(bounds)
     prior_loaded = False
 

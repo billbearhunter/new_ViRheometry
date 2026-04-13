@@ -1,5 +1,7 @@
 import sys
-sys.path.append("/usr/local/lib")
+import platform
+if platform.system() != "Windows":
+    sys.path.append("/usr/local/lib")
 import lcmaes
 
 stopping_criteria_dict = {'CONDITIONCOV':-15, 'TOLHISTFUN':1, 'TOLX':2, 'NOEFFECTAXIS':3, 'NOEFFECTCOOR':4, \

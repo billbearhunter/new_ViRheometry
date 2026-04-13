@@ -187,7 +187,7 @@ def _sample_in_box(box: dict, n: int, rng: np.random.Generator) -> np.ndarray:
     """Sample n points log-uniformly in η/σ_y and linearly in n/W/H."""
     lo_n,  hi_n  = box.get("n",       [MIN_N,    MAX_N])
     lo_e,  hi_e  = box.get("eta",     [0.001,    300.0])
-    lo_s,  hi_s  = box.get("sigma_y", [0.1,      400.0])
+    lo_s,  hi_s  = box.get("sigma_y", [0.001,    400.0])
     lo_w,  hi_w  = box.get("width",   [MIN_WIDTH, MAX_WIDTH])
     lo_h,  hi_h  = box.get("height",  [MIN_HEIGHT, MAX_HEIGHT])
 
@@ -208,7 +208,7 @@ def _lhs_in_box(box: dict, n: int, rng: np.random.Generator) -> np.ndarray:
 
     lo_n,  hi_n  = box.get("n",       [MIN_N,    MAX_N])
     lo_e,  hi_e  = box.get("eta",     [0.001,    300.0])
-    lo_s,  hi_s  = box.get("sigma_y", [0.1,      400.0])
+    lo_s,  hi_s  = box.get("sigma_y", [0.001,    400.0])
     lo_w,  hi_w  = box.get("width",   [MIN_WIDTH, MAX_WIDTH])
     lo_h,  hi_h  = box.get("height",  [MIN_HEIGHT, MAX_HEIGHT])
 

@@ -11,6 +11,7 @@ lives in libs/moe_core.py to avoid code duplication with optimize_2setups.py.
 
 import argparse
 import os
+import sys
 import datetime
 import csv
 from pathlib import Path
@@ -54,6 +55,7 @@ import torch
 
 from libs.moe_core import (
     GLOBAL_BOUNDS,
+    MIN_N, MAX_N, MIN_ETA, MAX_ETA, MIN_SIGMA_Y, MAX_SIGMA_Y,
     build_phi,
     get_adaptive_weights,
     soft_predict_batch,
@@ -165,7 +167,29 @@ def main():
                 if lo < hi:
                     bounds[k] = (lo, hi)
 
-    # ── Loss function ─────────────────────────────────────────────────────────
+    # ── Validate expert loading ─────────────────────────────────────────────
+    if not expert_cache:
+        print("[ERROR] No experts loaded successfully! Cannot optimize.")
+        sys.exit(1)
+
+    # ── Loss function (NMSE + log-barrier, consistent with 2/3-setup) ─────
+    import math
+    norm1      = np.mean(y1 ** 2) + 1e-9
+    LAMBDA_REG = 0.001   # no prior for 1-setup
+    BARRIER_WT = 0.001
+
+    theta_0 = default_x0(bounds)
+    scale_n       = MAX_N - MIN_N
+    scale_log_eta = math.log(MAX_ETA) - math.log(MIN_ETA)
+    scale_log_sig = math.log(MAX_SIGMA_Y) - math.log(max(MIN_SIGMA_Y, 1e-6))
+
+    local_scale = {}
+    for k in ["n", "eta", "sigma_y"]:
+        local_scale[k] = bounds[k][1] - bounds[k][0]
+        if k in ["eta", "sigma_y"]:
+            low = max(bounds[k][0], 1e-9)
+            local_scale[f"log_{k}"] = math.log(bounds[k][1]) - math.log(low)
+
     def loss_fn(thetas):
         losses = np.zeros(len(thetas))
         valid_idx, valid_params = [], []
@@ -178,16 +202,44 @@ def main():
                 valid_params.append(theta)
         if not valid_idx:
             return losses.tolist()
+
+        v = np.array(valid_params)
+
+        # Regularisation toward default x0 in log-space
+        d_n   = ((v[:, 0] - theta_0[0]) / scale_n) ** 2
+        d_eta = ((np.log(v[:, 1]) - math.log(theta_0[1])) / scale_log_eta) ** 2
+        sig0  = max(theta_0[2], 1e-9)
+        d_sig = ((np.log(np.maximum(v[:, 2], 1e-9)) - math.log(sig0)) / scale_log_sig) ** 2
+        prior_loss = LAMBDA_REG * (d_n + d_eta + d_sig)
+
+        # Log-barrier to keep parameters inside bounds
+        eps = 1e-9
+        def _barrier(vals_norm):
+            v_safe = np.clip(vals_norm, eps, 1.0 - eps)
+            return -np.log(v_safe) - np.log(1.0 - v_safe)
+
+        barrier = _barrier((v[:, 0] - bounds["n"][0]) / local_scale["n"])
+        barrier += _barrier(
+            (np.log(v[:, 1]) - math.log(max(bounds["eta"][0], 1e-9))) / local_scale["log_eta"]
+        )
+        barrier += _barrier(
+            (np.log(np.maximum(v[:, 2], 1e-9)) - math.log(max(bounds["sigma_y"][0], 1e-9)))
+            / local_scale["log_sigma_y"]
+        )
+        cpu_loss = prior_loss + BARRIER_WT * barrier
+
         try:
             preds    = soft_predict_batch(valid_params, expert_cache, expert_ids, weights, W1, H1, device)
-            mse_vals = np.mean((preds - y1.reshape(1, -1)) ** 2, axis=1)
-            for i, v in zip(valid_idx, mse_vals):
-                losses[i] = v
+            nmse_vals = np.mean((preds - y1.reshape(1, -1)) ** 2, axis=1) / norm1
+            final_loss = nmse_vals + cpu_loss
+            for i, val in zip(valid_idx, final_loss):
+                losses[i] = val
         except RuntimeError:
-            for i, param in zip(valid_idx, valid_params):
+            for j, (i, param) in enumerate(zip(valid_idx, valid_params)):
                 try:
                     pred = soft_predict_batch([param], expert_cache, expert_ids, weights, W1, H1, device)
-                    losses[i] = np.mean((pred - y1.reshape(1, -1)) ** 2)
+                    nmse = np.mean((pred - y1.reshape(1, -1)) ** 2) / norm1
+                    losses[i] = nmse + cpu_loss[j]
                 except Exception:
                     losses[i] = 1e6
         return losses.tolist()

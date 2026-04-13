@@ -37,7 +37,7 @@ from typing import Dict, List, Tuple, Optional, Any
 # ── Physical parameter bounds ──────────────────────────────────────────────────
 MIN_N,       MAX_N       = 0.3,   1.0
 MIN_ETA,     MAX_ETA     = 0.001, 300.0
-MIN_SIGMA_Y, MAX_SIGMA_Y = 0.0,   400.0
+MIN_SIGMA_Y, MAX_SIGMA_Y = 0.001, 400.0
 GLOBAL_BOUNDS = {
     "n":       (MIN_N,       MAX_N),
     "eta":     (MIN_ETA,     MAX_ETA),
@@ -94,6 +94,7 @@ class ExpertBundle:
     log_idx:      List[int]
     log_eps:      float
     poly_residual: Optional[dict] = None   # poly-residual correction dict or None
+    target_mode:  str = "absolute"         # "absolute" or "diff"
 
 
 # ── Gating feature vector ──────────────────────────────────────────────────────
@@ -252,7 +253,21 @@ def predict_expert_batch(
     # Inverse-scale: y_phys = Y_s * y_scale + y_mean
     y_mean  = bundle.y_mean.cpu().numpy()    # (1, 8)
     y_scale = bundle.y_scale.cpu().numpy()   # (1, 8)
-    return (Y_s * y_scale + y_mean).astype(float)
+    Y_phys  = (Y_s * y_scale + y_mean)
+
+    # Differential target mode: D → clip(D, 0) → cumsum → Y
+    if bundle.target_mode == "diff":
+        Y_phys = np.maximum(Y_phys, 0.0)          # Dₖ ≥ 0 (physical: flow is monotonic)
+        Y_phys = np.cumsum(Y_phys, axis=1)         # Y = cumsum(D)
+
+    # Physical constraints (apply universally as safety net):
+    # (a) flow distances are non-negative
+    Y_phys = np.maximum(Y_phys, 0.0)
+    # (b) flow distances are monotonically non-decreasing over time
+    for i in range(1, Y_phys.shape[1]):
+        Y_phys[:, i] = np.maximum(Y_phys[:, i], Y_phys[:, i - 1])
+
+    return Y_phys.astype(float)
 
 
 def soft_predict_batch(
@@ -429,12 +444,13 @@ def load_expert_bundle(path: str, device) -> ExpertBundle:
             m.eval(); l.eval()
             models.append(m); likes.append(l)
 
-    all_cols     = xs.get("all_cols", ["n", "eta", "sigma_y", "width", "height"])
-    log_cols     = set(xs.get("log_cols", ["eta", "sigma_y"]))
-    log_idx      = [i for i, c in enumerate(all_cols) if c in log_cols]
+    all_cols      = xs.get("all_cols", ["n", "eta", "sigma_y", "width", "height"])
+    log_cols      = set(xs.get("log_cols", ["eta", "sigma_y"]))
+    log_idx       = [i for i, c in enumerate(all_cols) if c in log_cols]
     poly_residual = ckpt.get("poly_residual")   # None if not trained
+    target_mode   = ckpt.get("target_mode", "absolute")   # backward compat
     return ExpertBundle(cid, models, likes, x_mean, x_scale, y_mean, y_scale,
-                        all_cols, log_idx, 1e-6, poly_residual)
+                        all_cols, log_idx, 1e-6, poly_residual, target_mode)
 
 
 # ── CMA-ES runner ──────────────────────────────────────────────────────────────
