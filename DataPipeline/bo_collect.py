@@ -296,15 +296,15 @@ def lhs_collect_cluster(
                 row.to_csv(out_csv, mode="a", header=False, index=False)
                 collected_target += 1
             else:
-                # Bonus: goes to its GMM-assigned cluster
-                if conf >= CONF_THRESHOLD:
-                    bonus_key = assigned_cid
-                    if bonus_key not in bonus_csvs:
-                        bonus_path = data_dir / f"cluster{bonus_key}_lhs_bonus.csv"
-                        if not bonus_path.exists():
-                            pd.DataFrame(columns=row_cols).to_csv(bonus_path, index=False)
-                        bonus_csvs[bonus_key] = bonus_path
-                    row.to_csv(bonus_csvs[bonus_key], mode="a", header=False, index=False)
+                # Bonus: save ALL points (incl. low-conf) to GMM-assigned
+                # cluster — no simulation wasted
+                bonus_key = assigned_cid
+                if bonus_key not in bonus_csvs:
+                    bonus_path = data_dir / f"cluster{bonus_key}_lhs_bonus.csv"
+                    if not bonus_path.exists():
+                        pd.DataFrame(columns=row_cols).to_csv(bonus_path, index=False)
+                    bonus_csvs[bonus_key] = bonus_path
+                row.to_csv(bonus_csvs[bonus_key], mode="a", header=False, index=False)
 
             # Progress log
             if collected_total % 10 == 0:
@@ -329,6 +329,154 @@ def lhs_collect_cluster(
         except:
             pass
         log.info(f"    Bonus → cluster {bcid}: {n_bonus} points ({bp.name})")
+
+
+def lhs_collect_multi(
+    target_ids: list,
+    boxes: dict,
+    data_dir: Path,
+    sim,
+    gmm_gate: dict,
+    n_per_cluster: int,
+    rng: np.random.Generator = None,
+):
+    """Sequential per-cluster LHS with cross-cluster progress sharing.
+
+    Iterates over target clusters one by one, sampling from each cluster's
+    bounding box. The key improvement: when a simulated point is GMM-assigned
+    to a *different* target cluster, it counts toward that cluster's progress.
+    So when we later reach that cluster, we need fewer (or zero) additional
+    simulations.
+
+    Non-target bonus points are saved as before.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    gmm    = gmm_gate["gmm"]
+    scaler = gmm_gate["scaler"]
+
+    target_set = set(target_ids)
+    row_cols   = INPUT_COLS + OUTPUT_COLS + ["cluster_id", "cluster_conf"]
+
+    # ── Initialise per-target progress & output CSVs ──────────────────────
+    progress = {}          # cid → collected count
+    out_csvs = {}          # cid → Path
+    for cid in target_ids:
+        csv_path = data_dir / f"cluster{cid}_lhs.csv"
+        existing = 0
+        if csv_path.exists():
+            existing = max(sum(1 for _ in open(csv_path)) - 1, 0)
+        else:
+            pd.DataFrame(columns=row_cols).to_csv(csv_path, index=False)
+        # Count bonus rows already collected by earlier clusters
+        bonus_path = data_dir / f"cluster{cid}_lhs_bonus.csv"
+        bonus_existing = 0
+        if bonus_path.exists():
+            bonus_existing = max(sum(1 for _ in open(bonus_path)) - 1, 0)
+        progress[cid] = existing + bonus_existing
+        out_csvs[cid] = csv_path
+
+    bonus_csvs = {}  # non-target cluster bonus files
+    sim_grand_total = 0
+    t0_global = time.time()
+
+    # ── Iterate cluster by cluster ────────────────────────────────────────
+    for cid in target_ids:
+        need = n_per_cluster - progress[cid]
+        if need <= 0:
+            log.info(f"\n  Cluster {cid}: already has {progress[cid]} points — SKIP")
+            continue
+
+        box = boxes.get(str(cid))
+        if box is None:
+            log.warning(f"Cluster {cid} not in boxes.json — skipping")
+            continue
+
+        log.info(f"\n{'='*55}")
+        log.info(f"  Cluster {cid}  need={need}  box={box}")
+        log.info(f"{'='*55}")
+
+        sim_count = 0
+        sim_fails = 0
+        t0 = time.time()
+        BATCH = min(50, max(need, 10) * 2)
+
+        while progress[cid] < n_per_cluster:
+            cands = _lhs_in_box(box, BATCH, rng)
+
+            for i in range(len(cands)):
+                if progress[cid] >= n_per_cluster:
+                    break
+
+                params = cands[i]
+                try:
+                    diffs = sim.run(
+                        float(params[0]), float(params[1]), float(params[2]),
+                        float(params[3]), float(params[4]),
+                    )
+                except Exception as exc:
+                    log.warning(f"    Sim failed: {exc}")
+                    sim_fails += 1
+                    continue
+
+                diffs = np.clip(diffs, 0.0, None)
+                sim_count += 1
+                sim_grand_total += 1
+
+                # GMM assignment
+                phi = build_phi(diffs, W=float(params[3]), H=float(params[4]))
+                phi_scaled = scaler.transform(phi)
+                prob = gmm.predict_proba(phi_scaled)
+                assigned_cid = int(np.argmax(prob, axis=1)[0]) + 1
+                conf = float(np.max(prob, axis=1)[0])
+
+                row_data = list(params) + list(diffs) + [assigned_cid, conf]
+                row = pd.DataFrame([row_data], columns=row_cols)
+
+                if conf >= CONF_THRESHOLD and assigned_cid in target_set \
+                        and progress[assigned_cid] < n_per_cluster:
+                    # High-conf hit on a target cluster — count toward goal
+                    row.to_csv(out_csvs[assigned_cid], mode="a",
+                               header=False, index=False)
+                    progress[assigned_cid] += 1
+                else:
+                    # Save ALL other points (incl. low-conf) to their
+                    # GMM-assigned cluster as bonus — no simulation wasted
+                    bkey = assigned_cid
+                    if bkey not in bonus_csvs:
+                        bp = data_dir / f"cluster{bkey}_lhs_bonus.csv"
+                        if not bp.exists():
+                            pd.DataFrame(columns=row_cols).to_csv(
+                                bp, index=False)
+                        bonus_csvs[bkey] = bp
+                    row.to_csv(bonus_csvs[bkey], mode="a",
+                               header=False, index=False)
+
+                # Progress log every 10 sims
+                if sim_count % 10 == 0:
+                    elapsed = time.time() - t0
+                    rate = sim_count / max(elapsed, 1)
+                    hit_pct = (progress[cid] - (n_per_cluster - need)) / max(sim_count, 1) * 100
+                    cross = {c: progress[c] for c in target_ids
+                             if c != cid and progress[c] > 0}
+                    eta_s = (n_per_cluster - progress[cid]) / max(
+                        (progress[cid] - (n_per_cluster - need)) / max(elapsed, 1), 1e-6)
+                    log.info(
+                        f"    cluster {cid}: [{progress[cid]}/{n_per_cluster}] "
+                        f"sims={sim_count} hit={hit_pct:.0f}% "
+                        f"rate={rate:.2f}/s ETA={eta_s/60:.1f}min  "
+                        f"cross-credit={cross}")
+
+        elapsed = time.time() - t0
+        log.info(f"  Cluster {cid} done: {progress[cid]} pts, "
+                 f"{sim_count} sims, {sim_fails} fails, {elapsed/60:.1f}min")
+
+    elapsed_total = time.time() - t0_global
+    log.info(f"\n  All clusters done: {sim_grand_total} total sims, "
+             f"{elapsed_total/60:.1f}min")
+    for cid in target_ids:
+        log.info(f"    Cluster {cid}: {progress[cid]} points")
 
 
 def bo_collect_cluster(
@@ -560,41 +708,57 @@ def main():
         gmm_gate = joblib.load(gmm_path)
         log.info(f"Loaded GMM gate (K={gmm_gate['k']})")
 
-    # ── Run collection per cluster ─────────────────────────────────────────
-    for cid in target_ids:
-        box = boxes.get(str(cid))
-        if box is None:
-            log.warning(f"Cluster {cid} not in boxes.json — skipping")
-            continue
-
+    # ── Run collection ──────────────────────────────────────────────────────
+    if args.mode == "lhs" and len(target_ids) > 1:
+        # Multi-cluster joint collection: cross-cluster progress sharing
         log.info(f"\n{'='*55}")
-        log.info(f"  Cluster {cid}  box={box}  mode={args.mode}")
+        log.info(f"  Multi-cluster LHS collection: {target_ids}")
+        log.info(f"  n_per_cluster={args.n_per_cluster}")
         log.info(f"{'='*55}")
+        lhs_collect_multi(
+            target_ids    = target_ids,
+            boxes         = boxes,
+            data_dir      = data_dir,
+            sim           = sim,
+            gmm_gate      = gmm_gate,
+            n_per_cluster = args.n_per_cluster,
+            rng           = rng,
+        )
+    else:
+        for cid in target_ids:
+            box = boxes.get(str(cid))
+            if box is None:
+                log.warning(f"Cluster {cid} not in boxes.json — skipping")
+                continue
 
-        if args.mode == "lhs":
-            lhs_collect_cluster(
-                cid       = cid,
-                box       = box,
-                data_dir  = data_dir,
-                sim       = sim,
-                gmm_gate  = gmm_gate,
-                n_collect = args.n_per_cluster,
-                rng       = rng,
-            )
-        else:
-            train_csv = data_dir / f"cluster{cid}_train.csv"
-            out_csv   = data_dir / f"cluster{cid}_bo.csv"
-            bo_collect_cluster(
-                cid         = cid,
-                box         = box,
-                train_csv   = train_csv,
-                out_csv     = out_csv,
-                sim         = sim,
-                n_collect   = args.n_per_cluster,
-                n_candidates= args.n_candidates,
-                surrogate_epochs=args.surrogate_epochs,
-                rng         = rng,
-            )
+            log.info(f"\n{'='*55}")
+            log.info(f"  Cluster {cid}  box={box}  mode={args.mode}")
+            log.info(f"{'='*55}")
+
+            if args.mode == "lhs":
+                lhs_collect_cluster(
+                    cid       = cid,
+                    box       = box,
+                    data_dir  = data_dir,
+                    sim       = sim,
+                    gmm_gate  = gmm_gate,
+                    n_collect = args.n_per_cluster,
+                    rng       = rng,
+                )
+            else:
+                train_csv = data_dir / f"cluster{cid}_train.csv"
+                out_csv   = data_dir / f"cluster{cid}_bo.csv"
+                bo_collect_cluster(
+                    cid         = cid,
+                    box         = box,
+                    train_csv   = train_csv,
+                    out_csv     = out_csv,
+                    sim         = sim,
+                    n_collect   = args.n_per_cluster,
+                    n_candidates= args.n_candidates,
+                    surrogate_epochs=args.surrogate_epochs,
+                    rng         = rng,
+                )
 
     log.info(f"\n=== Collection done (mode={args.mode}) ===")
     ids_str = " ".join(str(c) for c in target_ids)

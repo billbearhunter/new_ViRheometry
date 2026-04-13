@@ -228,7 +228,10 @@ def predict_expert_batch(
 
     # GP mean predictions (scaled space)
     preds_scaled = []
-    with torch.no_grad(), gpytorch.settings.fast_pred_var():
+    with torch.no_grad(), gpytorch.settings.fast_pred_var(), \
+         gpytorch.settings.max_cg_iterations(1000), \
+         gpytorch.settings.cg_tolerance(0.01), \
+         gpytorch.settings.max_preconditioner_size(100):
         for m, l in zip(bundle.models, bundle.likes):
             preds_scaled.append(l(m(xt)).mean.detach().cpu().numpy())
     Y_s = np.stack(preds_scaled, axis=1)   # (batch, 8) in scaled space

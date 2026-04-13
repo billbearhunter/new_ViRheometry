@@ -41,6 +41,7 @@ from dp_config import (
     INPUT_COLS, OUTPUT_COLS,
     N_CLUSTERS, CONF_THRESHOLD, BOX_CONF_THRESH, OUTLIER_Z_THRESH,
     MIN_N, MAX_N, MIN_ETA, MAX_ETA, MIN_SIGMA_Y, MAX_SIGMA_Y,
+    MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT,
 )
 from moe_utils import build_phi
 
@@ -52,6 +53,8 @@ GLOBAL_BOUNDS = {
     "n":       (MIN_N,       MAX_N),
     "eta":     (MIN_ETA,     MAX_ETA),
     "sigma_y": (MIN_SIGMA_Y, MAX_SIGMA_Y),
+    "width":   (MIN_WIDTH,   MAX_WIDTH),
+    "height":  (MIN_HEIGHT,  MAX_HEIGHT),
 }
 
 
@@ -98,23 +101,29 @@ def compute_box(df: pd.DataFrame, cluster_id: int,
                 conf_threshold: float = BOX_CONF_THRESH,
                 q_low: float = 0.02, q_high: float = 0.98,
                 buffer: float = 0.10) -> dict:
-    """Robust bounding box for a cluster (used to restrict CMA-ES search)."""
+    """Robust 5D bounding box for a cluster.
+
+    Covers (n, eta, sigma_y, width, height).  The width/height bounds are
+    used by bo_collect.py to focus LHS sampling; CMA-ES only searches over
+    (n, eta, sigma_y) so the extra dims don't affect the optimisation path.
+    """
     subset = df[(df["cluster_id"] == cluster_id) & (df["cluster_conf"] >= conf_threshold)]
     if len(subset) < 50:
         return {k: list(v) for k, v in GLOBAL_BOUNDS.items()}
 
+    LOG_COLS = {"eta", "sigma_y"}
     box, eps = {}, 1e-6
-    for col in ["n", "eta", "sigma_y"]:
+    for col in ["n", "eta", "sigma_y", "width", "height"]:
         vals = subset[col].values
-        if col in ("eta", "sigma_y"):
-            lv    = np.log(vals + eps)
+        if col in LOG_COLS:
+            lv     = np.log(vals + eps)
             lo, hi = np.quantile(lv, q_low), np.quantile(lv, q_high)
-            span  = hi - lo
-            bmin  = np.exp(lo - buffer * span)
-            bmax  = np.exp(hi + buffer * span)
+            span   = hi - lo
+            bmin   = np.exp(lo - buffer * span)
+            bmax   = np.exp(hi + buffer * span)
         else:
             lo, hi = np.quantile(vals, q_low), np.quantile(vals, q_high)
-            span  = hi - lo
+            span   = hi - lo
             bmin, bmax = lo - buffer * span, hi + buffer * span
         glo, ghi = GLOBAL_BOUNDS[col]
         box[col] = [float(max(glo, bmin)), float(min(ghi, bmax))]
@@ -135,6 +144,9 @@ def main():
                         help="Output workspace directory (default: workspace/moe_ws)")
     parser.add_argument("--k",      type=int, default=N_CLUSTERS,
                         help=f"Number of GMM clusters (default: {N_CLUSTERS})")
+    parser.add_argument("--cov-type", type=str, default="full",
+                        choices=["full", "diag", "tied", "spherical"],
+                        help="GMM covariance type (default: full)")
     parser.add_argument("--seed",   type=int, default=42)
     parser.add_argument("--force",  action="store_true",
                         help="Force re-clustering even if artifacts exist")
@@ -163,15 +175,26 @@ def main():
     log.info("Splitting data (80/10/10)...")
     train_df, val_df, test_df = stratified_split(df, seed=args.seed)
 
-    # 3. Train GMM on φ from training set
+    # 3. Train GMM on φ from training set (subsample for speed)
     log.info(f"Training GMM (K={args.k})...")
     phi_train  = build_phi(train_df)
     phi_scaler = StandardScaler().fit(phi_train)
     phi_scaled = phi_scaler.transform(phi_train)
+
+    GMM_FIT_CAP = 30_000
+    if len(phi_scaled) > GMM_FIT_CAP:
+        rng = np.random.RandomState(args.seed)
+        fit_idx = rng.choice(len(phi_scaled), GMM_FIT_CAP, replace=False)
+        phi_fit = phi_scaled[fit_idx]
+        log.info(f"  Subsampling {GMM_FIT_CAP:,} / {len(phi_scaled):,} for GMM fit")
+    else:
+        phi_fit = phi_scaled
+
     gmm        = GaussianMixture(
-        n_components=args.k, covariance_type="diag",
-        random_state=args.seed, n_init=5,
-    ).fit(phi_scaled)
+        n_components=args.k, covariance_type=args.cov_type,
+        random_state=args.seed, n_init=10, reg_covar=1e-5,
+        max_iter=300,
+    ).fit(phi_fit)
 
     # 4. Assign clusters to all splits
     def assign(frame: pd.DataFrame) -> pd.DataFrame:

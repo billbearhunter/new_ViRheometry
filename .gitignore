@@ -14,5 +14,21 @@ CMakeFiles/
 outputs/
 results/
 
-# DataPipeline runtime workspace (data CSVs, trained models, metrics)
+# DataPipeline runtime workspace
 DataPipeline/workspace/
+
+# MoE workspace large files (models + per-cluster CSVs)
+Optimization/moe_workspace*/expert_*.pt
+Optimization/moe_workspace*/_all_*.csv
+Optimization/moe_workspace*/cluster*_train.csv
+Optimization/moe_workspace*/cluster*_val.csv
+Optimization/moe_workspace*/cluster*_test.csv
+Optimization/moe_workspace*/cluster*_lhs.csv
+Optimization/moe_workspace*/cluster*_lhs_bonus.csv
+Optimization/moe_workspace*/train_labeled.csv
+Optimization/moe_workspace*/val_labeled.csv
+Optimization/moe_workspace*/test_labeled.csv
+Optimization/moe_workspace*_data.csv
+
+# Claude session files
+.claude/

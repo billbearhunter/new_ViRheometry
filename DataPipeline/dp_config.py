@@ -66,7 +66,7 @@ BOX_CONF_THRESH  = 0.7     # for cluster bounding-box computation
 OUTLIER_Z_THRESH = 3.5     # Z-score outlier removal threshold
 
 # ── GP expert training config ──────────────────────────────────────────────────
-EXACT_THRESHOLD  = 3000    # samples per cluster: <= use ExactGP, > use SVGP
+EXACT_THRESHOLD  = 8000    # samples per cluster: <= use ExactGP (+CG solver), > use SVGP
 INDUCING_POINTS  = 2048
 BATCH_SIZE_SVGP  = 512
 EPOCHS_EXACT     = 600

@@ -25,6 +25,7 @@ python train_experts.py --data workspace/moe_ws
 """
 
 import argparse
+import contextlib
 import glob
 import logging
 import os
@@ -67,11 +68,19 @@ log = logging.getLogger(__name__)
 
 # ── GP prediction helpers ──────────────────────────────────────────────────────
 
+def _cg_settings():
+    """Context manager for CG-based solves (memory-efficient ExactGP)."""
+    return gpytorch.settings.max_cg_iterations(1000), \
+           gpytorch.settings.cg_tolerance(0.01), \
+           gpytorch.settings.max_preconditioner_size(100)
+
+
 def gp_predict_scaled(models, likes, X_s: np.ndarray) -> np.ndarray:
     X_t = torch.tensor(X_s, dtype=DTYPE, device=DEVICE)
     preds = []
+    cg1, cg2, cg3 = _cg_settings()
     with torch.no_grad(), gpytorch.settings.fast_pred_var(), \
-         gpytorch.settings.cholesky_jitter(1e-3):
+         gpytorch.settings.cholesky_jitter(1e-3), cg1, cg2, cg3:
         for m, lk in zip(models, likes):
             m.eval(); lk.eval()
             preds.append(lk(m(X_t)).mean.detach().cpu().numpy())
@@ -82,7 +91,10 @@ def gp_predict_scaled(models, likes, X_s: np.ndarray) -> np.ndarray:
 
 def train_exact_gp(X_t, Y_t, epochs: int):
     models, likes = [], []
-    log.info(f"    [ExactGP] N={X_t.size(0)}, epochs={epochs}")
+    N = X_t.size(0)
+    use_cg = N > 6000
+    log.info(f"    [ExactGP] N={N}, epochs={epochs}, CG={use_cg}")
+    cg1, cg2, cg3 = _cg_settings()
     for i in range(Y_t.shape[1]):
         y = Y_t[:, i].contiguous()
         lk = GaussianLikelihood(noise_constraint=GreaterThan(1e-4)).to(DEVICE, DTYPE)
@@ -91,9 +103,19 @@ def train_exact_gp(X_t, Y_t, epochs: int):
         m.train(); lk.train()
         opt = torch.optim.Adam(m.parameters(), lr=LR_EXACT)
         mll = ExactMarginalLogLikelihood(lk, m)
+        # float32 needs larger jitter to keep Cholesky stable
+        jitter = 1e-2 if DTYPE == torch.float32 else 1e-3
         for _ in range(epochs):
             opt.zero_grad()
-            with gpytorch.settings.cholesky_jitter(1e-3):
+            ctx = [gpytorch.settings.cholesky_jitter(jitter),
+                   gpytorch.settings.fast_computations(
+                       covar_root_decomposition=False,
+                       log_prob=False, solves=False)]
+            if use_cg:
+                ctx.extend([cg1, cg2, cg3])
+            with contextlib.ExitStack() as stack:
+                for c in ctx:
+                    stack.enter_context(c)
                 loss = -mll(m(X_t), y)
             loss.backward(); opt.step()
         m.eval(); lk.eval()
@@ -254,6 +276,12 @@ def train_expert(train_csv: Path, val_csv: Path, out_pt: Path):
     }
     torch.save(state, out_pt)
     log.info(f"    Saved → {out_pt}")
+
+    # Free GPU memory after saving
+    del models, likes, X_t, Y_t
+    if train_x_save is not None:
+        del train_x_save, train_y_save
+    torch.cuda.empty_cache()
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────

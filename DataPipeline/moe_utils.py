@@ -16,7 +16,7 @@ from dp_config import INPUT_COLS, OUTPUT_COLS, LOG_INPUTS
 
 
 # ── Device / dtype ─────────────────────────────────────────────────────────────
-DTYPE  = torch.float64
+DTYPE  = torch.float32
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
