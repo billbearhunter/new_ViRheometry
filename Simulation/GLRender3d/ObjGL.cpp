@@ -8,6 +8,10 @@
 #ifdef __APPLE__
 #include <GLUT/glut.h>
 #include <OpenGL/OpenGL.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#include <GL/gl.h>
+#include <GL/glut.h>
 #else
 #include <GL/gl.h>
 #include <GL/glut.h>

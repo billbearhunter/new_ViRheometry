@@ -46,20 +46,18 @@ from sklearn.linear_model import Ridge
 from torch.utils.data import DataLoader, TensorDataset
 
 ROOT = Path(__file__).parent.parent.resolve()
-sys.path.insert(0, str(ROOT / "DataPipeline"))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from dp_config import (
+from surrogate.config import (
     INPUT_COLS, OUTPUT_COLS, LOG_INPUTS,
     EXACT_THRESHOLD, INDUCING_POINTS, BATCH_SIZE_SVGP,
     EPOCHS_EXACT, EPOCHS_SVGP, LR_EXACT, LR_SVGP,
     MAXERR_TARGET, POLY_ALPHA, POLY_DEGREES,
     CONF_THRESHOLD,
 )
-from moe_utils import (
-    DEVICE,
-    SingleOutputExactGP, SingleOutputSVGP,
-    LogStandardInputScaler, TargetScaler,
-)
+from surrogate.models import DEVICE, SingleOutputExactGP, SingleOutputSVGP
+from surrogate.scalers import LogStandardInputScaler, TargetScaler
 
 # Will be set by main() from --dtype flag or moe_utils default
 DTYPE = None
@@ -354,7 +352,7 @@ def main():
     elif args.dtype == "float32":
         DTYPE = torch.float32
     else:
-        from moe_utils import DTYPE as _DEFAULT_DTYPE
+        from surrogate.models import DTYPE as _DEFAULT_DTYPE
         DTYPE = _DEFAULT_DTYPE
     log.info(f"Training dtype: {DTYPE}")
 

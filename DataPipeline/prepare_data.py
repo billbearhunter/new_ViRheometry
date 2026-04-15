@@ -35,15 +35,16 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 ROOT = Path(__file__).parent.parent.resolve()
-sys.path.insert(0, str(ROOT / "DataPipeline"))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from dp_config import (
+from surrogate.config import (
     INPUT_COLS, OUTPUT_COLS,
     N_CLUSTERS, CONF_THRESHOLD, BOX_CONF_THRESH, OUTLIER_Z_THRESH,
     MIN_N, MAX_N, MIN_ETA, MAX_ETA, MIN_SIGMA_Y, MAX_SIGMA_Y,
     MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT,
 )
-from moe_utils import build_phi
+from surrogate.features import build_phi, build_input_features
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s")
@@ -148,6 +149,21 @@ def main():
                         choices=["full", "diag", "tied", "spherical"],
                         help="GMM covariance type (default: full)")
     parser.add_argument("--seed",   type=int, default=42)
+    parser.add_argument("--gate-space", type=str, default="phi",
+                        choices=["phi", "input", "hierarchical"],
+                        help="GMM gating space: 'phi' (observation features, 18D), "
+                             "'input' (parameter space 5D), or "
+                             "'hierarchical' (geometry groups + per-group phi)")
+    parser.add_argument("--k-geo",  type=int, default=12,
+                        help="Number of geometry groups for hierarchical mode (default: 12, BIC-justified)")
+    parser.add_argument("--k-phi",  type=int, nargs="*", default=None,
+                        help="Number of phi clusters per geometry group. "
+                             "Single value = same for all groups; "
+                             "multiple values = per-group (must match --k-geo). "
+                             "Default: BIC-justified per group.")
+    parser.add_argument("--re-threshold", type=float, default=100.0,
+                        help="Stage 0: Re threshold for splashing filter (default: 100). "
+                             "Set to 0 to disable.")
     parser.add_argument("--force",  action="store_true",
                         help="Force re-clustering even if artifacts exist")
     args = parser.parse_args()
@@ -171,53 +187,171 @@ def main():
     df = pd.concat(dfs, ignore_index=True).dropna(subset=INPUT_COLS + OUTPUT_COLS)
     log.info(f"Total after merge: {len(df):,} rows")
 
+    # 1b. Stage 0: Flow regime pre-classification (Re filter)
+    if args.re_threshold > 0:
+        from surrogate.regime_filter import filter_splashing
+        df, df_splash = filter_splashing(df, re_c=args.re_threshold)
+        if len(df_splash) > 0:
+            splash_path = out_dir / "splash_excluded.csv"
+            df_splash.to_csv(splash_path, index=False)
+            log.info(f"  Splashing samples saved → {splash_path}")
+
     # 2. Stratified split
     log.info("Splitting data (80/10/10)...")
     train_df, val_df, test_df = stratified_split(df, seed=args.seed)
 
-    # 3. Train GMM on φ from training set (subsample for speed)
-    log.info(f"Training GMM (K={args.k})...")
-    phi_train  = build_phi(train_df)
-    phi_scaler = StandardScaler().fit(phi_train)
-    phi_scaled = phi_scaler.transform(phi_train)
-
+    # 3. Train GMM
+    gate_space = args.gate_space
     GMM_FIT_CAP = 30_000
-    if len(phi_scaled) > GMM_FIT_CAP:
-        rng = np.random.RandomState(args.seed)
-        fit_idx = rng.choice(len(phi_scaled), GMM_FIT_CAP, replace=False)
-        phi_fit = phi_scaled[fit_idx]
-        log.info(f"  Subsampling {GMM_FIT_CAP:,} / {len(phi_scaled):,} for GMM fit")
+
+    def _fit_gmm(features, k, cov_type, seed, label=""):
+        scaler = StandardScaler().fit(features)
+        scaled = scaler.transform(features)
+        if len(scaled) > GMM_FIT_CAP:
+            rng = np.random.RandomState(seed)
+            fit_idx = rng.choice(len(scaled), GMM_FIT_CAP, replace=False)
+            fit_data = scaled[fit_idx]
+            log.info(f"  {label}Subsampling {GMM_FIT_CAP:,} / {len(scaled):,}")
+        else:
+            fit_data = scaled
+        gmm = GaussianMixture(
+            n_components=k, covariance_type=cov_type,
+            random_state=seed, n_init=10, reg_covar=1e-5, max_iter=300,
+        ).fit(fit_data)
+        return gmm, scaler
+
+    if gate_space == "hierarchical":
+        # ── Two-stage hierarchical clustering ────────────────────────────
+        K_geo = args.k_geo
+
+        # Resolve per-group K_phi list
+        if args.k_phi is None:
+            # Default: uniform K_phi=20 for all groups (BIC-justified)
+            k_phi_list = [20] * K_geo
+        elif len(args.k_phi) == 1:
+            k_phi_list = [args.k_phi[0]] * K_geo
+        else:
+            if len(args.k_phi) != K_geo:
+                raise ValueError(f"--k-phi has {len(args.k_phi)} values but --k-geo={K_geo}")
+            k_phi_list = args.k_phi
+
+        total_k = sum(k_phi_list)
+        log.info(f"HIERARCHICAL mode: K_geo={K_geo}, K_phi={k_phi_list}, total={total_k} experts")
+
+        # Stage 1: Geometry GMM on (W, H)
+        log.info("Stage 1: Clustering by geometry (W, H)...")
+        geo_features = train_df[["width", "height"]].values.astype(np.float64)
+        geo_gmm, geo_scaler = _fit_gmm(geo_features, K_geo, "full", args.seed, "Geo: ")
+
+        geo_labels_train = geo_gmm.predict(geo_scaler.transform(geo_features))
+        for g in range(K_geo):
+            n_g = (geo_labels_train == g).sum()
+            sub = train_df.iloc[geo_labels_train == g]
+            log.info(f"  Geo group {g}: {n_g:,} samples, "
+                     f"W=[{sub['width'].min():.1f},{sub['width'].max():.1f}], "
+                     f"H=[{sub['height'].min():.1f},{sub['height'].max():.1f}]")
+
+        # Stage 2: Per-group φ-space GMMs
+        log.info("Stage 2: Per-group phi-space clustering...")
+        phi_gmms = []
+        phi_scalers = []
+        phi_all_train = build_phi(train_df)
+
+        for g in range(K_geo):
+            K_phi_g = k_phi_list[g]
+            mask_g = geo_labels_train == g
+            phi_g = phi_all_train[mask_g]
+            log.info(f"  Geo group {g}: fitting GMM(K={K_phi_g}) on {len(phi_g)} samples...")
+            gmm_g, scaler_g = _fit_gmm(phi_g, K_phi_g, args.cov_type, args.seed + g + 1, f"G{g}: ")
+            phi_gmms.append(gmm_g)
+            phi_scalers.append(scaler_g)
+
+        # Compute cumulative offsets for global cluster IDs
+        # e.g. k_phi_list=[8,10,7] → offsets=[0,8,18], total=25
+        k_phi_offsets = [0]
+        for kp in k_phi_list[:-1]:
+            k_phi_offsets.append(k_phi_offsets[-1] + kp)
+
+        # Assign global cluster IDs
+        def assign_hierarchical(frame: pd.DataFrame) -> pd.DataFrame:
+            geo_feat = frame[["width", "height"]].values.astype(np.float64)
+            geo_labels = geo_gmm.predict(geo_scaler.transform(geo_feat))
+            phi_feat = build_phi(frame)
+
+            cluster_ids = np.zeros(len(frame), dtype=int)
+            cluster_confs = np.zeros(len(frame), dtype=float)
+
+            for g in range(K_geo):
+                mask_g = geo_labels == g
+                if not np.any(mask_g):
+                    continue
+                phi_g = phi_feat[mask_g]
+                ps_g = phi_scalers[g].transform(phi_g)
+                prob_g = phi_gmms[g].predict_proba(ps_g)
+                local_ids = np.argmax(prob_g, axis=1)  # 0-indexed within group
+                global_ids = k_phi_offsets[g] + local_ids + 1  # 1-indexed global
+                cluster_ids[mask_g] = global_ids
+                cluster_confs[mask_g] = np.max(prob_g, axis=1)
+
+            out = frame.copy()
+            out["cluster_id"] = cluster_ids
+            out["cluster_conf"] = cluster_confs
+            return out
+
+        train_lab = assign_hierarchical(train_df)
+        val_lab = assign_hierarchical(val_df)
+        test_lab = assign_hierarchical(test_df)
+
+        # Save hierarchical gate
+        joblib.dump({
+            "gate_space": "hierarchical",
+            "k": total_k,
+            "k_geo": K_geo,
+            "k_phi": k_phi_list,          # per-group list (not single int)
+            "k_phi_offsets": k_phi_offsets,
+            "geo_gmm": geo_gmm,
+            "geo_scaler": geo_scaler,
+            "phi_gmms": phi_gmms,
+            "phi_scalers": phi_scalers,
+        }, gmm_path)
+        log.info(f"Saved hierarchical gate → {gmm_path}")
+        effective_k = total_k
+
     else:
-        phi_fit = phi_scaled
+        # ── Original single-stage clustering ─────────────────────────────
+        if gate_space == "input":
+            log.info(f"Training GMM in INPUT space (n, log_η, log_σ_y, W, H) (K={args.k})...")
+            phi_train = build_input_features(train_df)
+        else:
+            log.info(f"Training GMM in PHI space (18D observation features) (K={args.k})...")
+            phi_train = build_phi(train_df)
 
-    gmm        = GaussianMixture(
-        n_components=args.k, covariance_type=args.cov_type,
-        random_state=args.seed, n_init=10, reg_covar=1e-5,
-        max_iter=300,
-    ).fit(phi_fit)
+        gmm, phi_scaler = _fit_gmm(phi_train, args.k, args.cov_type, args.seed)
 
-    # 4. Assign clusters to all splits
-    def assign(frame: pd.DataFrame) -> pd.DataFrame:
-        phi  = build_phi(frame)
-        ps   = phi_scaler.transform(phi)
-        prob = gmm.predict_proba(ps)
-        out  = frame.copy()
-        out["cluster_id"]   = np.argmax(prob, axis=1) + 1   # 1-indexed
-        out["cluster_conf"] = np.max(prob, axis=1)
-        return out
+        def assign(frame: pd.DataFrame) -> pd.DataFrame:
+            if gate_space == "input":
+                phi = build_input_features(frame)
+            else:
+                phi = build_phi(frame)
+            ps = phi_scaler.transform(phi)
+            prob = gmm.predict_proba(ps)
+            out = frame.copy()
+            out["cluster_id"] = np.argmax(prob, axis=1) + 1
+            out["cluster_conf"] = np.max(prob, axis=1)
+            return out
 
-    train_lab = assign(train_df)
-    val_lab   = assign(val_df)
-    test_lab  = assign(test_df)
+        train_lab = assign(train_df)
+        val_lab = assign(val_df)
+        test_lab = assign(test_df)
 
-    # 5. Save GMM gate
-    joblib.dump({"gmm": gmm, "scaler": phi_scaler, "k": args.k},
-                gmm_path)
-    log.info(f"Saved GMM gate → {gmm_path}")
+        joblib.dump({"gmm": gmm, "scaler": phi_scaler, "k": args.k,
+                     "gate_space": gate_space}, gmm_path)
+        log.info(f"Saved GMM gate → {gmm_path}")
+        effective_k = args.k
 
     # 6. Per-cluster train/val files + bounding boxes
     boxes: dict = {}
-    for cid in range(1, args.k + 1):
+    for cid in range(1, effective_k + 1):
         mask_tr = (train_lab["cluster_id"] == cid) & (train_lab["cluster_conf"] >= CONF_THRESHOLD)
         sub_tr  = remove_outliers(train_lab[mask_tr])
         sub_tr.to_csv(out_dir / f"cluster{cid}_train.csv", index=False)

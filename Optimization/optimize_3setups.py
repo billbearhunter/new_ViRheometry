@@ -30,8 +30,12 @@ from libs.moe_core import (
     GLOBAL_BOUNDS,
     MIN_N, MAX_N, MIN_ETA, MAX_ETA, MIN_SIGMA_Y, MAX_SIGMA_Y,
     build_phi,
+    build_input_phi,
     get_adaptive_weights,
+    hierarchical_get_weights,
     soft_predict_batch,
+    dynamic_soft_predict_batch,
+    load_all_experts,
     clamp_params,
     default_x0,
     check_feasibility,
@@ -147,50 +151,66 @@ def main():
         {"id": 3, "W": args.W3, "H": args.H3, "y": np.array(args.dis3, float)},
     ]
 
-    # ── Load MoE gate and select experts per config ───────────────────────────
-    gate_dict = maybe_load_joblib(os.path.join(args.moe_dir, "gmm_gate.joblib"))
-    norms     = [np.mean(c["y"] ** 2) + 1e-9 for c in cfgs]
+    # ── Load MoE gate ───────────────────────────────────────────────────────────
+    gate_dict  = maybe_load_joblib(os.path.join(args.moe_dir, "gmm_gate.joblib"))
+    moe_boxes  = load_json(os.path.join(args.moe_dir, "boxes.json"))
+    gate_space = gate_dict.get("gate_space", "phi")
+    norms      = [np.mean(c["y"] ** 2) + 1e-9 for c in cfgs]
+    print(f"[Info] Gate space: {gate_space}")
 
-    needed_experts = set()
-    config_experts = []
-    for cfg in cfgs:
-        phi    = build_phi(cfg["y"], cfg["W"], cfg["H"])
-        ids, w = get_adaptive_weights(
-            gate_dict, phi,
-            strategy=args.strategy,
-            threshold=args.threshold,
-            topk_hard=args.topk,
-            confidence_threshold=args.confidence_threshold,
-            max_experts=args.max_experts,
-        )
-        config_experts.append((ids, w))
-        needed_experts.update(ids)
+    if gate_space == "input":
+        expert_cache = load_all_experts(args.moe_dir, device, gate_dict.get("k", 60))
+        print(f"Loaded {len(expert_cache)} experts for input-space gating")
+        config_experts = None
+    else:
+        needed_experts = set()
+        config_experts = []
+        for cfg in cfgs:
+            if gate_space == "hierarchical":
+                ids, w = hierarchical_get_weights(
+                    gate_dict, cfg["y"], cfg["W"], cfg["H"],
+                    strategy=args.strategy, threshold=args.threshold,
+                    max_experts=args.max_experts, topk_hard=args.topk,
+                    confidence_threshold=args.confidence_threshold,
+                )
+            else:
+                phi    = build_phi(cfg["y"], cfg["W"], cfg["H"])
+                ids, w = get_adaptive_weights(
+                    gate_dict, phi,
+                    strategy=args.strategy,
+                    threshold=args.threshold,
+                    topk_hard=args.topk,
+                    confidence_threshold=args.confidence_threshold,
+                    max_experts=args.max_experts,
+                )
+            config_experts.append((ids, w))
+            needed_experts.update(ids)
 
-    # ── Load expert models ────────────────────────────────────────────────────
-    moe_boxes = load_json(os.path.join(args.moe_dir, "boxes.json"))
-    expert_cache = {}
-    print(f"Loading {len(needed_experts)} experts...")
-    for cid in needed_experts:
-        try:
-            path = os.path.join(args.moe_dir, f"expert_{cid}.pt")
-            if os.path.exists(path):
-                expert_cache[cid] = load_expert_bundle(path, device)
-        except Exception as e:
-            print(f"[Warning] Failed to load expert {cid}: {e}")
+        expert_cache = {}
+        print(f"Loading {len(needed_experts)} experts...")
+        for cid in needed_experts:
+            try:
+                path = os.path.join(args.moe_dir, f"expert_{cid}.pt")
+                if os.path.exists(path):
+                    expert_cache[cid] = load_expert_bundle(path, device)
+            except Exception as e:
+                print(f"[Warning] Failed to load expert {cid}: {e}")
+
     if not expert_cache:
         print("[ERROR] No experts loaded successfully! Cannot optimize.")
         import sys; sys.exit(1)
 
-    # ── Tighten bounds from expert boxes ─────────────────────────────────────
+    # ── Tighten bounds (φ-space only) ────────────────────────────────────────
     bounds = GLOBAL_BOUNDS.copy()
-    for cid in needed_experts:
-        box = moe_boxes.get(str(cid)) or moe_boxes.get(cid)
-        if box:
-            for k in ["n", "eta", "sigma_y"]:
-                lo = max(bounds[k][0], float(box[k][0]))
-                hi = min(bounds[k][1], float(box[k][1]))
-                if lo < hi:
-                    bounds[k] = (lo, hi)
+    if gate_space != "input":
+        for cid in needed_experts:
+            box = moe_boxes.get(str(cid)) or moe_boxes.get(cid)
+            if box:
+                for k in ["n", "eta", "sigma_y"]:
+                    lo = max(bounds[k][0], float(box[k][0]))
+                    hi = min(bounds[k][1], float(box[k][1]))
+                    if lo < hi:
+                        bounds[k] = (lo, hi)
 
     # ── Load initial guess (Setup 2 prior preferred, else Setup 1) ────────────
     theta_0 = default_x0(bounds)
@@ -285,8 +305,15 @@ def main():
         try:
             total_nmse = np.zeros(len(valid_idx))
             for cfg_idx, cfg in enumerate(cfgs):
-                e_ids, e_wts = config_experts[cfg_idx]
-                preds    = soft_predict_batch(valid_params, expert_cache, e_ids, e_wts, cfg["W"], cfg["H"], device)
+                if gate_space == "input":
+                    preds = dynamic_soft_predict_batch(
+                        valid_params, gate_dict, expert_cache, cfg["W"], cfg["H"], device,
+                        strategy=args.strategy, threshold=args.threshold,
+                        max_experts=args.max_experts,
+                    )
+                else:
+                    e_ids, e_wts = config_experts[cfg_idx]
+                    preds = soft_predict_batch(valid_params, expert_cache, e_ids, e_wts, cfg["W"], cfg["H"], device)
                 mse_vals = np.mean((preds - cfg["y"].reshape(1, -1)) ** 2, axis=1)
                 total_nmse += mse_vals / norms[cfg_idx]
             final_loss = (total_nmse / len(cfgs)) + cpu_loss
@@ -298,8 +325,14 @@ def main():
                 try:
                     single_nmse = 0.0
                     for cfg_idx, cfg in enumerate(cfgs):
-                        e_ids, e_wts = config_experts[cfg_idx]
-                        pp = soft_predict_batch([param], expert_cache, e_ids, e_wts, cfg["W"], cfg["H"], device)
+                        if gate_space == "input":
+                            pp = dynamic_soft_predict_batch(
+                                [param], gate_dict, expert_cache, cfg["W"], cfg["H"], device,
+                                strategy=args.strategy, threshold=args.threshold,
+                            )
+                        else:
+                            e_ids, e_wts = config_experts[cfg_idx]
+                            pp = soft_predict_batch([param], expert_cache, e_ids, e_wts, cfg["W"], cfg["H"], device)
                         single_nmse += np.mean((pp - cfg["y"].reshape(1, -1)) ** 2) / norms[cfg_idx]
                     losses[i] = (single_nmse / len(cfgs)) + cpu_loss[j]
                 except Exception:

@@ -31,14 +31,14 @@ import pandas as pd
 import torch
 
 ROOT = Path(__file__).parent.parent.resolve()
-sys.path.insert(0, str(ROOT / "DataPipeline"))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from dp_config import INPUT_COLS, OUTPUT_COLS, CONF_THRESHOLD
-from moe_utils import (
-    DEVICE, DTYPE,
-    load_expert, predict_with_expert,
-    build_phi,
-)
+from surrogate.config import INPUT_COLS, OUTPUT_COLS, CONF_THRESHOLD
+from surrogate.models import DEVICE, DTYPE
+from surrogate.features import build_phi
+from surrogate.expert_io import load_expert_for_training as load_expert, _safe_torch_load
+from DataPipeline.moe_utils import predict_with_expert
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s")
@@ -58,6 +58,24 @@ def compute_metrics(Y_true: np.ndarray, Y_pred: np.ndarray) -> dict:
         "mae_per_output":    abs_e.mean(axis=0).tolist(),
         "maxerr_per_output": abs_e.max(axis=0).tolist(),
     }
+
+
+def _from_diff(D: np.ndarray) -> np.ndarray:
+    """Differential increments → absolute flow distances (cumsum with Dk>=0)."""
+    return np.cumsum(np.maximum(D, 0.0), axis=1)
+
+
+def predict_with_diff_handling(pt_path, X_raw):
+    """Load expert, predict, and handle diff-target inverse if needed."""
+    gp_kind, models, likes, xs_dict, ys_dict, poly = load_expert(str(pt_path))
+    Y_pred = predict_with_expert(models, likes, xs_dict, ys_dict, poly, X_raw)
+
+    # Check if this expert used diff-target encoding
+    ckpt = _safe_torch_load(str(pt_path), map_location="cpu")
+    if ckpt.get("target_mode") == "diff":
+        Y_pred = _from_diff(Y_pred)
+
+    return gp_kind, Y_pred
 
 
 # ── Parity plot ────────────────────────────────────────────────────────────────
@@ -92,6 +110,32 @@ def _parity_plot(Y_true, Y_pred, cluster_id, out_dir: Path):
 
 # ── Global MoE evaluation ─────────────────────────────────────────────────────
 
+def _route_hierarchical(gate, df):
+    """Route samples through hierarchical gate → 1-indexed cluster IDs."""
+    from sklearn.preprocessing import StandardScaler
+    geo_gmm     = gate["geo_gmm"]
+    geo_scaler  = gate["geo_scaler"]
+    phi_gmms    = gate["phi_gmms"]
+    phi_scalers = gate["phi_scalers"]
+    k_phi_offsets = gate["k_phi_offsets"]
+    K_geo       = gate["k_geo"]
+
+    geo_feat   = df[["width", "height"]].values.astype(np.float64)
+    geo_labels = geo_gmm.predict(geo_scaler.transform(geo_feat))
+    phi_feat   = build_phi(df)
+
+    cids = np.zeros(len(df), dtype=int)
+    for g in range(K_geo):
+        mask_g = geo_labels == g
+        if not np.any(mask_g):
+            continue
+        ps_g   = phi_scalers[g].transform(phi_feat[mask_g])
+        prob_g = phi_gmms[g].predict_proba(ps_g)
+        local  = np.argmax(prob_g, axis=1)
+        cids[mask_g] = k_phi_offsets[g] + local + 1
+    return cids
+
+
 def evaluate_global(data_dir: Path, test_csv: Path, plots: bool) -> pd.DataFrame:
     """Route all test samples through the trained MoE and compute global metrics."""
     gmm_path = data_dir / "gmm_gate.joblib"
@@ -99,19 +143,23 @@ def evaluate_global(data_dir: Path, test_csv: Path, plots: bool) -> pd.DataFrame
         log.error(f"GMM gate not found: {gmm_path}")
         return pd.DataFrame()
 
-    gate   = joblib.load(gmm_path)
-    gmm    = gate["gmm"]
-    scaler = gate["scaler"]
-    k      = gate["k"]
+    gate = joblib.load(gmm_path)
+    k    = gate["k"]
 
     df_test = pd.read_csv(test_csv)
     log.info(f"Test set: {len(df_test):,} rows")
 
-    # GMM routing
-    phi  = build_phi(df_test)
-    ps   = scaler.transform(phi)
-    prob = gmm.predict_proba(ps)
-    cids = np.argmax(prob, axis=1) + 1   # 1-indexed
+    # GMM routing — supports both flat and hierarchical gates
+    gate_space = gate.get("gate_space", "phi")
+    if gate_space == "hierarchical":
+        cids = _route_hierarchical(gate, df_test)
+    else:
+        gmm    = gate["gmm"]
+        scaler = gate["scaler"]
+        phi    = build_phi(df_test)
+        ps     = scaler.transform(phi)
+        prob   = gmm.predict_proba(ps)
+        cids   = np.argmax(prob, axis=1) + 1
 
     rows = []
     all_preds  = np.zeros((len(df_test), len(OUTPUT_COLS)))
@@ -126,12 +174,11 @@ def evaluate_global(data_dir: Path, test_csv: Path, plots: bool) -> pd.DataFrame
         if not mask.any():
             continue
 
-        X_raw = df_test.loc[mask, INPUT_COLS].values
+        X_raw  = df_test.loc[mask, INPUT_COLS].values
         Y_true = df_test.loc[mask, OUTPUT_COLS].values
 
         try:
-            gp_kind, models, likes, xs_dict, ys_dict, poly = load_expert(str(pt_path))
-            Y_pred = predict_with_expert(models, likes, xs_dict, ys_dict, poly, X_raw)
+            gp_kind, Y_pred = predict_with_diff_handling(pt_path, X_raw)
         except Exception as exc:
             log.warning(f"  Cluster {cid} predict failed: {exc}")
             continue
@@ -198,8 +245,7 @@ def evaluate_per_cluster(data_dir: Path, plots: bool) -> pd.DataFrame:
         Y_true = df_val[OUTPUT_COLS].values
 
         try:
-            gp_kind, models, likes, xs_dict, ys_dict, poly = load_expert(str(pt_path))
-            Y_pred = predict_with_expert(models, likes, xs_dict, ys_dict, poly, X_raw)
+            gp_kind, Y_pred = predict_with_diff_handling(pt_path, X_raw)
         except Exception as exc:
             log.warning(f"  Cluster {cid} failed: {exc}")
             continue
@@ -216,7 +262,7 @@ def evaluate_per_cluster(data_dir: Path, plots: bool) -> pd.DataFrame:
             **{f"max_x{i+1:02d}": m["maxerr_per_output"][i] for i in range(len(OUTPUT_COLS))},
         })
         log.info(f"  Cluster {cid:>3}: n_val={len(df_val):>4}  MAE={m['mae']:.4f}  "
-                 f"MaxErr={m['maxerr']:.4f}  [poly={'yes' if poly else 'no'}]")
+                 f"MaxErr={m['maxerr']:.4f}  [{gp_kind}]")
 
         if plots:
             _parity_plot(Y_true, Y_pred, cid, data_dir)

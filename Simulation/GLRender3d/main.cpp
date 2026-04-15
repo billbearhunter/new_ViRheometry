@@ -1,14 +1,20 @@
 #include "main.h"
 #include "ObjGL.h"
 #include "FluidMat.h"
-#include <getopt.h>
 #include <fstream>
-#ifdef __APPLE__
+#ifdef _WIN32
+#include <windows.h>
+#include <GL/gl.h>
+#include <GL/glut.h>
+#include <getopt.h>
+#elif defined(__APPLE__)
 #include <GLUT/glut.h>
 #include <OpenGL/OpenGL.h>
+#include <getopt.h>
 #else
 #include <GL/gl.h>
 #include <GL/glut.h>
+#include <getopt.h>
 #endif
 
 #ifndef M_PI

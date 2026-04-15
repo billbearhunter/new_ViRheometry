@@ -266,7 +266,11 @@ class PartickeSkinner3DTaichi:
         f.write(b_phi)
         f.close()
 
-        subprocess.call([self.py_marching_cube_path, self.py_phi_fn, self.py_obj_fn])
+        # On Windows, try .exe extension if the original path doesn't exist
+        mc_path = self.py_marching_cube_path
+        if not os.path.isfile(mc_path) and os.path.isfile(mc_path + ".exe"):
+            mc_path = mc_path + ".exe"
+        subprocess.call([mc_path, self.py_phi_fn, self.py_obj_fn])
 
 
 if len(sys.argv) < 6:

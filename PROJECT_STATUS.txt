@@ -1,5 +1,5 @@
 ================================================================================
-ViRheometry Project Status — 2026-04-13
+ViRheometry Project Status — 2026-04-15
 ================================================================================
 
 1. PROJECT OVERVIEW
@@ -10,145 +10,251 @@ dam-break flow. Parameters: n (power-law index), η (viscosity), σ_y (yield str
 Pipeline:
   Video → Calibration (flow distances) → MoE Surrogate → CMA-ES Optimization
 
-Surrogate: Mixture-of-Experts (MoE)
-  - GMM gating network in 18-dim φ space (geometry-normalized flow features)
-  - Per-cluster ExactGP expert: Matérn 2.5 + Linear kernel
-  - Input: (n, η, σ_y, W, H) 5D  →  Output: (x_01..x_08) 8D flow distances (cm)
-
-Ground truth (Tonkatsu sauce): n=0.5297, η=33.28, σ_y=40.57
+Current active workspace: Optimization/moe_workspace/  (hierarchical gating, ~240 experts)
+Current target material: Tonkatsu2  (GT: n=0.6191, η=21.0, σ_y=53.3)
 
 
-2. ARCHITECTURE CHANGES (this session)
-========================================
+2. CORE ALGORITHM (CONFIRMED)
+==============================
 
-a) MoE restructure: moe_workspace6 (in progress, replacing workspace5)
-   - Dataset: x_diff_data20251201.csv unpacked + bonus → 224,763 rows (was 145,369)
-   - GMM: K=60, full covariance (was K=100, diagonal)
-     * BIC screening on 20K subsample confirmed K=60 optimal
-     * Full cov captures inter-dimension correlations in 18D φ space
-     * GMM fit on 30K subsample for speed, predict on full 180K train set
-   - Bounding boxes: 5D (n, η, σ_y, W, H) instead of 3D
-   - Cluster sizes: 558–5176, mean 2881, median 2754
+2.1 Input / Output
+  - Input  (5D): n, η (Pa·s), σ_y (Pa), W (dam width, cm), H (dam height, cm)
+  - Output (8D): x_01..x_08 flow distances (cm) at 8 timesteps
 
-b) Training improvements
-   - float32 (was float64): ~30x faster on consumer GPU
-   - cholesky_jitter=1e-2 for float32 stability
-   - fast_computations(covar_root_decomposition=False) to force Cholesky
-   - CG solver threshold raised to N>6000 (was 2500)
-   - GPU memory cleared after each cluster (del + torch.cuda.empty_cache())
-   - EXACT_THRESHOLD raised to 8000
+2.2 Hierarchical Gating Network
+  Stage 1 — Geometry group (geo_gmm):
+    - 2D GMM on (W, H)
+    - K_geo small (e.g. 5-8 geometry regions)
+    - Hard argmax assignment at inference
 
-c) prepare_data.py
-   - Added --cov-type argument (default: full)
-   - GMM fit capped at 30K subsample (GMM_FIT_CAP) for large datasets
-   - 5D bounding boxes: iterates n, eta, sigma_y, width, height
+  Stage 2 — Flow-profile group (phi_gmms):
+    - Per-geo-group GMM in 18D φ space
+    - φ = build_phi(y_obs, W, H): geometry-normalized flow features
+    - Within each geo group: K_phi_g experts (variable per group)
+    - Global expert ID = k_phi_offsets[g] + local_idx + 1  (1-indexed)
 
-d) bo_collect.py
-   - Cross-cluster progress sharing in lhs_collect_multi
-   - Zero-waste policy: all simulated points saved to GMM-assigned cluster
+  Gate selection strategies (surrogate/gating.py):
+    - hard   : argmax single expert (used in train/val/diagnostic)
+    - soft   : posterior-weighted blend of top-K experts (used in CMA-ES)
+    - var    : variance-aware blend w_k ∝ π_k / σ_k²
+    - adaptive: confidence-dependent switching
 
-e) moe_core.py (inference)
-   - CG settings added to prediction context
+  Empirical finding (2026-04-15): gate posterior is extremely peaked
+    (median max_p = 1.000, 87.5% of test points > 0.9). Consequence:
+    blending provides < 2% MaxErr improvement over hard argmax.
+    High test error is GP-quality limited, NOT routing limited.
 
-f) New tool: DataPipeline/select_k.py
-   - Standalone BIC/AIC screening for optimal GMM K
-   - Usage: python DataPipeline/select_k.py --csv data.csv --ks 40 60 80 100 120
+2.3 Per-cluster Expert (ExactGP)
+  - Kernel: Matérn 2.5 + Linear
+  - dtype: float32 (cholesky_jitter=1e-2)
+  - Optional poly-residual boost if GP MaxErr > 0.05 on val set
+    (sample-weighted Ridge regression on GP residuals)
+  - Differential target encoding: predict Δx between timesteps
+    (from commit 8895b8f)
+  - EXACT_THRESHOLD=8000 (CG solver above this size)
+  - fast_computations(covar_root_decomposition=False) to force Cholesky
+
+2.4 Data Collection
+  - collect_data.py: HeadlessSimulator (no OBJ render, ~10s/sim on GPU)
+  - MPM 3D (Taichi): 200K-400K particles, CGS units, 8 timesteps
+  - Full path: config/setting.xml → HeadlessSimulator → (x_01..x_08)
+
+2.5 CMA-ES Optimization (CMA-ES with log-barrier + prior reg)
+  Multi-stage bootstrap:
+    Stage 1 (optimize_1setup.py): recommend Setup 2 from first observation
+    Stage 2 (optimize_2setups.py): use 2 observations, recommend Setup 3
+    Stage 3 (optimize_3setups.py): final estimate from 3 observations
+  Default: --strategy threshold --threshold 0.01 --max_experts 5
 
 
-3. CURRENT STATE
-================
+3. DATA SUPPLEMENTATION ALGORITHM (ACTIVE LEARNING)
+====================================================
 
-moe_workspace5/  — OLD (K=100, diag, 145K data) — kept as reference baseline
-moe_workspace6/  — NEW (K=60, full cov, 225K data) — IN PROGRESS
+3.1 Diagnostic (DataPipeline/diagnose_and_sample.py)
+  For each expert, route test set via HARD argmax → compute per-expert
+  MaxErr, MAE, RMSE on assigned test points.
+  Output: diagnostic_report.csv (pre) / diagnostic_report_post.csv (after retrain)
 
-moe_workspace6 training status (as of 2026-04-13):
-  - GMM clustering: DONE (gmm_gate.joblib saved)
-  - GP experts: ~46/60 completed, remaining ~14 still training
-  - expert_10.pt trained in float64 (all others float32) — functionally OK
+3.2 Tier-based Sampling (Round 1, completed)
+  Tier A (MaxErr very high, CRITICAL): 80 LHS direct, no variance ranking
+  Tier B (MaxErr high, confidence in GP): 50 samples, GP variance-ranked
+  Tier C (MaxErr mid):                    25 samples, GP variance-ranked
+  Round 1 summary: 14A + 17B + 10C = 41 experts, 2220 sims, 72 retrained
 
-Training command (reference):
-  python DataPipeline/train_experts.py --data Optimization/moe_workspace6 \
-    --clusters <remaining_ids> --force
+3.3 Pure LHS Supplementation (Round 2, IN PROGRESS as of this write)
+  After Round 1 analysis showed GP-variance ranking gave little benefit
+  (gate too peaked), Round 2 uses pure LHS scaled by severity:
+    Critical (MaxErr > 3.0)     : 200 samples/expert
+    High     (1.0 - 3.0)        : 150 samples/expert
+    Mid      (0.5 - 1.0)        : 100 samples/expert
+    Low-Mid  (0.25 - 0.5)       :  60 samples/expert
+  Round 2 total: 54 experts, 6060 sims, ~29h at 17s/sim
+
+3.4 Routing + Append + Retrain Loop
+  New sims → hierarchical gate → append to cluster{id}_train.csv
+  → train_experts.py with --clusters <affected_ids>
+  Known limitation (Round 1 finding): ~20% of new samples route to non-source
+  experts (φ-space misroute). These samples concentrate at cluster (W,H)
+  boundaries and can cause GP lengthscale shrinkage → mild degradation in
+  previously-stable experts ("untargeted degradation" effect).
 
 
-4. NEXT STEPS
+4. SESSION PROGRESS (2026-04-14 to 2026-04-15)
+================================================
+
+4.1 Completed
+  [x] Hierarchical gating (geo_gmm + phi_gmms) stabilized
+  [x] Differential target encoding (commit 8895b8f)
+  [x] GPU memory leak fix, --dtype flag, unified optimize output (8e7a1fc)
+  [x] Round 1 supplementation: 2220 sims across 41 experts
+  [x] Route + append + retrain: 72 experts (Round 1)
+  [x] Post-Round-1 diagnostic:
+      - Mean MaxErr: 0.435 → 0.362 (-17%)
+      - Experts > 0.25: went from widespread to 54
+      - Experts > 0.1:  107
+      - Active experts: 239 → 240 (expert 1 activated from 30 → 205 samples)
+  [x] CMA-ES Tonkatsu2 validation (Stage 1 + Stage 2):
+      - Stage 2 η error -38.2% → -21.5% (major improvement)
+      - Stage 2 n  error +6.0%  → -0.9%  (near-perfect)
+      - Stage 2 σ_y -4.1% → -17.6% (mild regression, open issue)
+
+4.2 In Progress
+  [ ] Round 2 LHS supplementation (background task b8qi7vbo4)
+      6060 sims, writing to Optimization/moe_workspace/supplement_v2.csv
+      Progress: ~160/6060 as of 11:30 2026-04-15
+      ETA: ~29 hours
+
+4.3 Planned (post Round 2)
+  [ ] Route + append + retrain ~60 experts
+  [ ] A/B kernel test on still-high-error experts (Matérn 2.5 vs RBF vs ...)
+  [ ] If A/B kernel shows system-wide gain: full 240-expert retrain (~8h)
+  [ ] Final CMA-ES Tonkatsu2 validation
+
+
+5. KEY FILES
 =============
 
-Step 1: Wait for GP training to finish (all 60 experts)
-  Check: ls Optimization/moe_workspace6/expert_*.pt | wc -l  (should be 60)
+surrogate/                       — reusable MoE inference modules
+  config.py       — INPUT_COLS, OUTPUT_COLS, PARAM_BOUNDS
+  features.py     — build_phi() (geometry-normalized flow features)
+  expert_io.py    — load/save ExpertBundle (GP models + scalers + poly)
+  models.py       — ExactGP with Matérn 2.5 + Linear
+  scalers.py      — float32-safe standardization
+  gating.py       — hierarchical_get_weights, get_adaptive_weights
+  predict.py      — predict_expert_batch (mean), predict_expert_variance
+  regime_filter.py— flow-regime classification (pre-surrogate)
 
-Step 2: Evaluate all experts
-  python DataPipeline/evaluate_experts.py --data Optimization/moe_workspace6 --mode val
-  Target: median MaxErr < 0.1 cm, no cluster > 1.0 cm
-
-Step 3: Run 3-setup CMA-ES optimization
-  python Optimization/optimize_3setups.py \
-    -W1 3.5 -H1 6.7 \
-    -dis1 0.9934375 3.332692 5.793578 7.843668 8.983648 9.338487 9.403675 9.424664 \
-    -W2 3.4 -H2 2.0 \
-    -dis2 0.70626307 1.8434453 2.5627532 2.9179034 3.1175337 3.2430563 3.3375454 3.413351 \
-    -W3 7.0 -H3 7.0 \
-    -dis3 1.0464225 3.8134809 6.73189 9.052673 10.41106 10.939348 11.133526 11.244328 \
-    --moe_dir Optimization/moe_workspace6 \
-    --material_name Tonkatsu --topk 2
-  Compare inferred vs GT: n=0.5297, η=33.28, σ_y=40.57
-
-Step 4: If high-error clusters found after evaluation
-  - Use select_k.py to re-verify K if needed
-  - Collect more data with bo_collect.py (5D boxes, LHS+GMM, cross-cluster sharing)
-  - Retrain affected experts
-
-
-5. REFERENCE: GT FLOW DISTANCES
-================================
-
-Setup 1 (W=3.5, H=6.7):
-  0.9934375  3.332692  5.793578  7.843668  8.983648  9.338487  9.403675  9.424664
-
-Setup 2 (W=3.4, H=2.0):
-  0.70626307 1.8434453 2.5627532 2.9179034 3.1175337 3.2430563 3.3375454 3.413351
-
-Setup 3 (W=7.0, H=7.0):
-  1.0464225  3.8134809 6.73189   9.052673  10.41106  10.939348 11.133526 11.244328
-
-GT parameters: n=0.5297, η=33.28, σ_y=40.57
-
-
-6. KNOWN ISSUES
-===============
-
-a) expert_10.pt trained in float64; others in float32. Inference in moe_core.py
-   loads dtype from checkpoint so this is handled automatically.
-
-b) Some clusters show Poly residual fallback (MaxErr > 0.05 cm after GP).
-   This is expected behavior — poly residual is saved in the .pt file.
-
-c) Cholesky jitter warning ("A not p.d., added jitter of 1e-2") is normal
-   for float32 GP training. Does not affect model quality.
-
-d) Known simulation issues (pre-existing, not addressed):
-   - is_inner_of_box reset bug
-   - h=0.05 hardcode vs py_particle_hl=0.0315 mismatch
-
-
-7. KEY FILES
-============
-
-DataPipeline/
-  select_k.py         — BIC/AIC screening for optimal GMM K  [NEW]
-  prepare_data.py     — GMM clustering + 5D bounding boxes
-  train_experts.py    — per-cluster ExactGP training (float32, jitter fix)
-  bo_collect.py       — LHS+GMM data collection (cross-cluster sharing)
-  evaluate_experts.py — val/test metrics per cluster
-  dp_config.py        — shared constants (EXACT_THRESHOLD=8000, etc.)
-  moe_utils.py        — build_phi(), scalers (float32)
+DataPipeline/                    — training / data pipeline
+  prepare_data.py      — hierarchical GMM fit, 5D bounding boxes
+  select_k.py          — BIC/AIC screening for K_geo, K_phi
+  train_experts.py     — per-cluster ExactGP training
+  collect_data.py      — HeadlessSimulator (MPM 3D)
+  bo_collect.py        — LHS+GMM data collection (cross-cluster sharing)
+  evaluate_experts.py  — val/test metrics per cluster (hard argmax)
+  diagnose_and_sample.py — active learning: diagnose + select + simulate  [NEW]
+  supplement_v2.py     — Round-2 LHS-only driver                          [NEW]
+  soft_diagnose.py     — compare hard vs soft vs variance-aware MaxErr    [NEW]
+  dp_config.py         — shared constants
+  moe_utils.py         — legacy helpers (partly superseded by surrogate/)
 
 Optimization/
-  optimize_2setups.py     — 2-setup CMA-ES
-  optimize_3setups.py     — 3-setup CMA-ES (primary tool)
-  libs/moe_core.py        — inference-time MoE prediction + CG settings
-  moe_workspace5/         — OLD baseline (K=100, diag) — reference only
-  moe_workspace6/         — NEW active workspace (K=60, full cov, 225K data)
-  moe_workspace6_data.csv — merged training data (224,763 rows)
+  optimize_1setup.py, optimize_2setups.py, optimize_3setups.py — CMA-ES drivers
+  libs/moe_core.py — inference glue (uses surrogate/ + CMA-ES loss)
+  moe_workspace/   — ACTIVE workspace (hierarchical, ~240 experts)
+
+Simulation/
+  config/setting.xml  — simulation config (used by HeadlessSimulator)
+  scripts/MPM_Emulator.py
+  ParticleSkinner3DTaichi/
+
+
+6. CURRENT DIAGNOSTIC SNAPSHOT (post Round 1, pre Round 2)
+============================================================
+
+Experts by MaxErr bucket (240 active):
+  ≤ 0.1  : 133 (55.4%)
+  > 0.1  : 107 (44.6%)
+  > 0.25 :  54 (22.5%)  ← target for Round 2
+  > 1.0  :  22 (9.2%)
+  > 3.0  :   8 (3.3%)   ← Critical: all Tier A originally
+
+Hard vs Soft vs Variance-aware blending (same test set):
+  mean MaxErr: 0.3618 / 0.3617 / 0.3542
+  p99 per-point MaxErr: 0.3953 / 0.3888 / 0.3649
+  Conclusion: blending provides negligible improvement in this system.
+
+
+7. TONKATSU2 CMA-ES CURRENT BEST
+==================================
+
+Tonkatsu2 GT: n=0.6191, η=21.0, σ_y=53.3
+  Stage 1 (W=2.5, H=3.0) → n=0.6090, η=15.13, σ_y=58.08
+  Stage 2 (W=2.0, H=5.0) → n=0.6138, η=16.48, σ_y=43.90
+
+Observations: (cm, 8 timesteps)
+  Stage 1 dis: 0.853 2.482 3.675 4.231 4.447 4.544 4.608 4.660
+  Stage 2 dis: 0.839 2.730 4.555 5.748 6.194 6.294 6.330 6.357
+
+
+8. COMMANDS REFERENCE
+======================
+
+Diagnose current workspace:
+  python DataPipeline/diagnose_and_sample.py --workspace Optimization/moe_workspace \
+      --diagnose-only
+
+Compare hard vs soft blending (no retrain needed):
+  python DataPipeline/soft_diagnose.py --workspace Optimization/moe_workspace \
+      --threshold 0.01 --max-experts 5
+
+Round-2 supplementation (current running):
+  python DataPipeline/supplement_v2.py \
+      --workspace Optimization/moe_workspace \
+      --out-candidates Optimization/moe_workspace/supplement_v2.candidates.csv \
+      --out-results   Optimization/moe_workspace/supplement_v2.csv \
+      --flush-every 20
+
+After Round-2: route + append + retrain
+  # 1. Route new sims via gate (sample util in moe_utils / custom script)
+  # 2. Append to cluster{id}_train.csv
+  # 3. Retrain affected clusters:
+  python DataPipeline/train_experts.py --data Optimization/moe_workspace \
+      --clusters <ids> --force
+
+CMA-ES Tonkatsu2 (Stage 2 example):
+  python Optimization/optimize_2setups.py \
+      -W1 2.5 -H1 3.0 -dis1 0.853 2.482 3.675 4.231 4.447 4.544 4.608 4.660 \
+      -W2 2.0 -H2 5.0 -dis2 0.839 2.730 4.555 5.748 6.194 6.294 6.330 6.357 \
+      --moe_dir moe_workspace \
+      --setup1_dir result_tonkatsu2_stage1_v2 \
+      --out_dir result_tonkatsu2_stage2_v2 \
+      --material Tonkatsu2 \
+      --strategy threshold --threshold 0.01 --max_experts 5 \
+      --sigma0 0.5 --popsize 16 --maxiter 700 --seed 42
+
+
+9. KNOWN ISSUES / OPEN QUESTIONS
+==================================
+
+a) φ-space misrouting (~20% of new LHS samples go to non-source clusters)
+   → causes mild degradation of ~20 previously-stable experts per round
+   → possible fixes: softer filter (cluster_conf > 0.7 accept),
+     per-cluster hyperparameter anchoring, (W,H) convex-hull constraint
+
+b) Stage-2 σ_y regression (-4% → -18%) after Round 1
+   → hypothesis: some σ_y-sensitive experts not in Round-1 tier list
+   → Round 2 covers all post-Round-1 experts > 0.25, should remedy
+
+c) Expert 52, 103 (Tier A) received 0 new samples due to routing mismatch
+   → will receive 150-200 samples in Round 2 (new LHS may also misroute)
+   → fallback: manual targeted routing if still unfixed after Round 2
+
+d) Gate posterior is too peaked → blending barely helps
+   → supplementation must be the primary improvement strategy
+   → alternatively, deep kernels / different kernel families per cluster
+
+e) Known simulation issues (pre-existing):
+   - is_inner_of_box reset bug
+   - h=0.05 hardcode vs py_particle_hl=0.0315 mismatch
 
 ================================================================================

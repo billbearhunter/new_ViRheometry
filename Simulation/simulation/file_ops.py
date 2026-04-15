@@ -102,9 +102,20 @@ class FileOperations:
         saveStateIntermediateFilePath = os.path.join(output_dir, f'config_{self.py_save_count:02d}_phi.dat')
         outObjFilePath = os.path.join(output_dir, f'config_{self.py_save_count:02d}.obj')
         
-        # Define skinning paths
-        particleSkinnerApp = 'ParticleSkinner3DTaichi/ParticleSkinner3DTaichi.py'
-        marching_cube_path = 'ParticleSkinner3DTaichi/cpp_marching_cubes/build/cpp_marching_cubes'
+        # Define skinning paths (use absolute paths for Windows subprocess compatibility)
+        _sim_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        particleSkinnerApp = os.path.join(_sim_root, 'ParticleSkinner3DTaichi', 'ParticleSkinner3DTaichi.py')
+        _mc_dir = os.path.join(_sim_root, 'ParticleSkinner3DTaichi', 'cpp_marching_cubes', 'build')
+        _mc_base = os.path.join(_mc_dir, 'cpp_marching_cubes')
+        # Auto-detect: Windows .exe -> macOS binary -> macOS-named binary
+        if os.path.isfile(_mc_base + '.exe'):
+            marching_cube_path = _mc_base + '.exe'
+        elif os.path.isfile(_mc_base):
+            marching_cube_path = _mc_base
+        elif os.path.isfile(os.path.join(_mc_dir, 'cpp_marching_cubes_macos')):
+            marching_cube_path = os.path.join(_mc_dir, 'cpp_marching_cubes_macos')
+        else:
+            marching_cube_path = _mc_base
  
         # Clean up existing files
         for filepath in [saveStateFilePath, saveStateIntermediateFilePath, outObjFilePath]:
@@ -117,8 +128,9 @@ class FileOperations:
         # Generate particle data file
         self._generate_particle_dat_file(agTaichiMPM, saveStateFilePath)
 
-        # Prepare for skinning process
-        self.generate_obj_file(agTaichiMPM, outObjFilePath, saveStateFilePath, saveStateIntermediateFilePath, marching_cube_path)
+        # Prepare for skinning process (skip if SKIP_OBJ is set for fast batch collection)
+        if not os.environ.get("SKIP_OBJ"):
+            self.generate_obj_file(agTaichiMPM, outObjFilePath, saveStateFilePath, saveStateIntermediateFilePath, marching_cube_path)
 
         
         # Note: External skinning command remains commented out as in original
@@ -174,7 +186,8 @@ class FileOperations:
         """
 
         # Generate the .obj file using the particle skinning process
-        particleSkinnerApp = 'ParticleSkinner3DTaichi/ParticleSkinner3DTaichi.py'
+        _sim_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        particleSkinnerApp = os.path.join(_sim_root, 'ParticleSkinner3DTaichi', 'ParticleSkinner3DTaichi.py')
 
         cmd = f'python3 "{particleSkinnerApp}" "{0.05}" "{saveStateFilePath}" "{saveStateIntermediateFilePath}" "{outObjFilePath}" "{marching_cube_path}"'
         print(cmd)

@@ -5,10 +5,31 @@ import glob
 import re
 import xml.etree.ElementTree as ET
 
+def _detect_gl_render_path():
+    """Auto-detect GLRender3d binary for the current platform."""
+    import platform
+    _sim_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = []
+    if platform.system() == "Windows":
+        candidates = [
+            os.path.join(_sim_root, "GLRender3d", "build_win3", "Release", "GLRender3d.exe"),
+            os.path.join(_sim_root, "GLRender3d", "build", "GLRender3d.exe"),
+        ]
+    else:
+        candidates = [
+            os.path.join(_sim_root, "GLRender3d", "build", "GLRender3d"),
+        ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    # Fallback to relative path
+    return "GLRender3d/build/GLRender3d"
+
+
 class MPMEmulator:
-    def __init__(self, 
-                 base_path='results', 
-                 GL_render_path="GLRender3d/build/GLRender3d",
+    def __init__(self,
+                 base_path='results',
+                 GL_render_path=None,
                  xml_config_path="config/setting.xml"):
         """
         OBJ renderer with config-specific displacement value passing and XML camera config.
@@ -19,7 +40,7 @@ class MPMEmulator:
             xml_config_path: Path to the XML configuration file
         """
         self.base_path = base_path
-        self.GL_render_path = GL_render_path
+        self.GL_render_path = GL_render_path or _detect_gl_render_path()
         self.xml_config_path = xml_config_path
         
         # Load camera configuration from XML

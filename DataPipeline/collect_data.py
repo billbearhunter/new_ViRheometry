@@ -43,7 +43,11 @@ from scipy.stats import qmc
 ROOT    = Path(__file__).parent.parent.resolve()
 SIM_DIR = ROOT / "Simulation"
 
-from dp_config import (
+_ROOT = Path(__file__).parent.parent.resolve()
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from surrogate.config import (
     SIM_ROOT, INPUT_COLS, OUTPUT_COLS,
     MIN_N, MAX_N, MIN_ETA, MAX_ETA, MIN_SIGMA_Y, MAX_SIGMA_Y,
     MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT,
