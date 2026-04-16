@@ -152,8 +152,13 @@ def calibrate(calib_img_path, fluid_w, fluid_h):
     aruco_params = _get_detector_params()
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-7)
 
-    corners, ids, _ = aruco.detectMarkers(gray, dictionary=ARUCO_DICT,
-                                          parameters=aruco_params)
+    # OpenCV 4.8+ moved detectMarkers into ArucoDetector class
+    if hasattr(aruco, "ArucoDetector"):
+        detector = aruco.ArucoDetector(ARUCO_DICT, aruco_params)
+        corners, ids, _ = detector.detectMarkers(gray)
+    else:
+        corners, ids, _ = aruco.detectMarkers(gray, dictionary=ARUCO_DICT,
+                                              parameters=aruco_params)
     print(f"[calib] detected {len(corners)} markers")
     if ids is None or len(corners) == 0:
         raise RuntimeError("No ArUco markers detected")
@@ -161,8 +166,14 @@ def calibrate(calib_img_path, fluid_w, fluid_h):
     for c in corners:
         cv2.cornerSubPix(gray, c, (3,3), (-1,-1), criteria)
 
-    ret, ch_corners, ch_ids = aruco.interpolateCornersCharuco(
-        corners, ids, gray, CHARUCO_BOARD)
+    # OpenCV 4.8+: use CharucoDetector for interpolation
+    if hasattr(aruco, "CharucoDetector"):
+        charuco_det = aruco.CharucoDetector(CHARUCO_BOARD)
+        ch_corners, ch_ids, _, _ = charuco_det.detectBoard(gray)
+        ret = len(ch_corners) if ch_corners is not None else 0
+    else:
+        ret, ch_corners, ch_ids = aruco.interpolateCornersCharuco(
+            corners, ids, gray, CHARUCO_BOARD)
     print(f"[calib] ChArUco corners: {ret}")
     if ret is None or ret <= 10 or ch_corners is None:
         raise RuntimeError("Not enough ChArUco corners")
@@ -195,6 +206,360 @@ def calibrate(calib_img_path, fluid_w, fluid_h):
     print(f"[calib] theta      = {theta}")
     print(f"[calib] reprojection error = {result.fun:.4f} px")
     return theta, img_W, img_H
+
+
+def _charuco_3d_points(fluid_w):
+    """
+    ChArUco board corner 3D positions in the world frame (metres).
+    Matches the X0 grid used in calibrate().
+    Returns: (24, 3) array — one row per corner id (0..23).
+    """
+    pts = []
+    for y in np.arange(-0.04, 0.09, 0.04):          # 4 rows: z direction
+        for x in np.arange(-0.08, 0.13, 0.04):      # 6 cols: x direction
+            pts.append([x + fluid_w, 0.0, y])
+    return np.array(pts, dtype=np.float64)
+
+
+def detect_charuco(gray):
+    """
+    Detect ChArUco corners in a grayscale image.
+    Returns: (ch_corners, ch_ids) or (None, None) if detection fails.
+    """
+    aruco_params = _get_detector_params()
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-7)
+
+    if hasattr(aruco, "ArucoDetector"):
+        detector = aruco.ArucoDetector(ARUCO_DICT, aruco_params)
+        corners, ids, _ = detector.detectMarkers(gray)
+    else:
+        corners, ids, _ = aruco.detectMarkers(gray, dictionary=ARUCO_DICT,
+                                              parameters=aruco_params)
+    if ids is None or len(corners) == 0:
+        return None, None
+
+    for c in corners:
+        cv2.cornerSubPix(gray, c, (3, 3), (-1, -1), criteria)
+
+    if hasattr(aruco, "CharucoDetector"):
+        charuco_det = aruco.CharucoDetector(CHARUCO_BOARD)
+        ch_corners, ch_ids, _, _ = charuco_det.detectBoard(gray)
+        ret = len(ch_corners) if ch_corners is not None else 0
+    else:
+        ret, ch_corners, ch_ids = aruco.interpolateCornersCharuco(
+            corners, ids, gray, CHARUCO_BOARD)
+    if ret is None or ret < 4 or ch_corners is None:
+        return None, None
+    return ch_corners, ch_ids
+
+
+def refine_extrinsic_edge(target_gray, K, R_init, t_init,
+                          fluid_w, fluid_h, W, H,
+                          max_iter=200):
+    """
+    Stage 2 — Refine camera extrinsic (R, t) by minimising chamfer distance
+    between RENDERED cube edges and DETECTED container edges in config_00,
+    then fine-tuning with direct IoU maximisation.  K stays FIXED.
+
+    Only adjusts 6 DoF (R, t) — no focal / intrinsic changes.
+
+    Two-phase approach:
+      Phase 1: Chamfer distance (L-BFGS-B) — smooth gradient, all visible
+               face edges.  Interior edges act as natural regularisation
+               against drift.
+      Phase 2: IoU fine-tuning (Nelder-Mead) — starts from Phase 1 result
+               with tiny simplex.  Directly maximises the final metric.
+
+    Bounded within ±2° rotation and ±2 cm translation of the ChArUco
+    baseline to prevent wild jumps.
+
+    Args:
+        target_gray:  config_00.png (grayscale, white bg / black fg)
+        K:            3×3 intrinsic matrix (fixed)
+        R_init:       3×3 rotation from Stage 1 (OpenCV convention)
+        t_init:       (3,) translation from Stage 1
+        fluid_w:      Container width in metres
+        fluid_h:      Container height in metres
+        W, H:         Image width, height in pixels
+        max_iter:     Maximum L-BFGS-B iterations (Phase 1)
+
+    Returns:
+        dict with keys: R, t, cost_before, cost_after
+        or None on failure.
+    """
+    from scipy.ndimage import distance_transform_edt
+    from scipy.spatial.transform import Rotation as Rot
+
+    # ── 1. Build target edge distance field ─────────────────────────────
+    target_fg = (target_gray < 128).astype(np.uint8)
+    target_edges = cv2.Canny(target_fg * 255, 50, 150)
+    dt = distance_transform_edt(target_edges == 0).astype(np.float64)
+
+    # ── 2. Helper: render cube edges as pixel list ──────────────────────
+    verts_3d = _cube_verts(fluid_w, fluid_h)
+
+    def _render_edge_pixels(R_mat, t_vec):
+        """Project all edges of visible faces → pixel coords."""
+        pv = _project_KRt(verts_3d, K, R_mat, t_vec)
+        if np.any(np.isnan(pv)):
+            return np.zeros((0, 2))
+        eye = (-R_mat.T @ t_vec).flatten()
+        edge_px = []
+        for fi, face in enumerate(_CUBE_FACES):
+            center = verts_3d[face].mean(axis=0)
+            if _FACE_NORMALS[fi] @ (eye - center) <= 0:
+                continue
+            corners = pv[face]
+            for j in range(len(corners)):
+                p0 = corners[j]
+                p1 = corners[(j + 1) % len(corners)]
+                n_pts = max(2, int(np.linalg.norm(p1 - p0)))
+                ts = np.linspace(0, 1, n_pts)
+                line = np.outer(1 - ts, p0) + np.outer(ts, p1)
+                edge_px.append(line)
+        if not edge_px:
+            return np.zeros((0, 2))
+        return np.vstack(edge_px)
+
+    # ── 3. Phase 1: Chamfer distance (L-BFGS-B) ────────────────────────
+    def chamfer_cost(params):
+        rvec = params[:3]
+        tvec = params[3:6]
+        R_mat = Rot.from_rotvec(rvec).as_matrix()
+        pixels = _render_edge_pixels(R_mat, tvec)
+        if len(pixels) == 0:
+            return 1e6
+        px = np.clip(pixels[:, 0], 0, W - 1.001)
+        py = np.clip(pixels[:, 1], 0, H - 1.001)
+        ix = px.astype(int); iy = py.astype(int)
+        fx = px - ix; fy = py - iy
+        ix1 = np.minimum(ix + 1, W - 1)
+        iy1 = np.minimum(iy + 1, H - 1)
+        d = (dt[iy, ix] * (1 - fx) * (1 - fy) +
+             dt[iy, ix1] * fx * (1 - fy) +
+             dt[iy1, ix] * (1 - fx) * fy +
+             dt[iy1, ix1] * fx * fy)
+        return float(d.mean())
+
+    rvec0 = Rot.from_matrix(R_init).as_rotvec()
+    x0 = np.concatenate([rvec0, t_init.flatten()])
+    cost_before = chamfer_cost(x0)
+
+    rot_margin = np.radians(1.0)
+    t_margin   = 0.01   # metres (1 cm)
+    lb = np.concatenate([rvec0 - rot_margin, t_init.flatten() - t_margin])
+    ub = np.concatenate([rvec0 + rot_margin, t_init.flatten() + t_margin])
+
+    res1 = minimize(chamfer_cost, x0, method="L-BFGS-B",
+                    bounds=list(zip(lb, ub)),
+                    options={"maxiter": max_iter, "ftol": 1e-8})
+    cost_after_phase1 = chamfer_cost(res1.x)
+    print(f"[edge] Phase 1 chamfer: {cost_before:.3f} → {cost_after_phase1:.3f} px")
+
+    # ── 4. Phase 2: IoU fine-tuning (Nelder-Mead) ──────────────────────
+    target_fg_bool = target_gray < 128
+
+    def neg_iou(params):
+        rvec = params[:3]
+        tvec = params[3:6]
+        R_mat = Rot.from_rotvec(rvec).as_matrix()
+        mask = render_mask_KRt(K, R_mat, tvec, fluid_w, fluid_h, W, H)
+        pred = mask < 128
+        inter = np.count_nonzero(pred & target_fg_bool)
+        union = np.count_nonzero(pred | target_fg_bool)
+        if union == 0:
+            return 0.0
+        return -inter / union
+
+    # Start from Phase 1 result; tiny simplex for local polish
+    x1 = res1.x.copy()
+    iou_before = -neg_iou(x1)
+    initial_simplex = [x1.copy()]
+    step_r = np.radians(0.15)    # ~0.15° rotation
+    step_t = 0.0015              # 1.5 mm translation
+    for i in range(6):
+        v = x1.copy()
+        v[i] += step_r if i < 3 else step_t
+        initial_simplex.append(v)
+
+    res2 = minimize(neg_iou, x1, method="Nelder-Mead",
+                    options={
+                        "maxiter": 300,
+                        "xatol": 1e-7, "fatol": 1e-7,
+                        "initial_simplex": np.array(initial_simplex),
+                        "adaptive": True,
+                    })
+    iou_after = -neg_iou(res2.x)
+    print(f"[edge] Phase 2 IoU:     {iou_before:.4f} → {iou_after:.4f}")
+
+    # Use Phase 2 result if it improved; otherwise keep Phase 1
+    if iou_after >= iou_before:
+        x_final = res2.x
+        cost_after = chamfer_cost(x_final)
+    else:
+        x_final = res1.x
+        cost_after = cost_after_phase1
+        iou_after = iou_before
+
+    # Safety clamp: reject if too far from baseline
+    rvec_out = x_final[:3]
+    t_out    = x_final[3:6]
+    rot_dev = np.degrees(np.linalg.norm(rvec_out - rvec0))
+    t_dev   = np.linalg.norm(t_out - t_init.flatten()) * 100.0  # cm
+    if rot_dev > 2.0 or t_dev > 2.0:
+        print(f"[edge] WARNING: refinement drifted "
+              f"(rot={rot_dev:.2f}°, t={t_dev:.2f}cm) — keeping ChArUco")
+        return {
+            "R": R_init, "t": t_init.flatten(),
+            "cost_before": cost_before, "cost_after": cost_before,
+        }
+
+    R_out = Rot.from_rotvec(rvec_out).as_matrix()
+    return {
+        "R": R_out,
+        "t": t_out,
+        "cost_before": cost_before,
+        "cost_after": cost_after,
+    }
+
+
+def refine_extrinsic_features(frame0_bgr, bg_img_bgr, K, R_bg, t_bg,
+                               y_plane=0.0, ratio_thresh=0.7,
+                               ransac_reproj=5.0, min_inliers=8):
+    """
+    Stage 2 — Refine camera extrinsic (R, t) using SIFT feature matching
+    between bg_img (ChArUco-calibrated) and frame 0 (experiment start).
+
+    The ChArUco board may be absent from the video.  Instead, we match
+    background features (table, wall, objects) visible in BOTH images.
+
+    Strategy:
+      1. SIFT match bg_img ↔ frame 0
+      2. For each matched bg_img point, back-project through (K, R_bg, t_bg)
+         onto the y = y_plane surface → 3D world coordinate
+      3. solvePnP(3D, frame0_2D, K) → R_exp, t_exp
+
+    K stays FIXED (from Stage 1).
+
+    Returns:
+        dict with keys: R, t, n_matches, n_inliers, reproj_err
+        or None if matching fails.
+    """
+    # ── 1. SIFT detect + match ───────────────────────────────────────────
+    sift = cv2.SIFT_create(nfeatures=3000)
+
+    gray_bg = cv2.cvtColor(bg_img_bgr, cv2.COLOR_BGR2GRAY)
+    gray_f0 = cv2.cvtColor(frame0_bgr,  cv2.COLOR_BGR2GRAY)
+
+    # Resize frame0 to bg dims if needed (bg might be higher-res JPG)
+    if gray_bg.shape != gray_f0.shape:
+        gray_f0 = cv2.resize(gray_f0, (gray_bg.shape[1], gray_bg.shape[0]),
+                             interpolation=cv2.INTER_LINEAR)
+        frame0_resized = True
+        scale_x = frame0_bgr.shape[1] / bg_img_bgr.shape[1]
+        scale_y = frame0_bgr.shape[0] / bg_img_bgr.shape[0]
+    else:
+        frame0_resized = False
+        scale_x = scale_y = 1.0
+
+    kp1, des1 = sift.detectAndCompute(gray_bg, None)
+    kp2, des2 = sift.detectAndCompute(gray_f0, None)
+    if des1 is None or des2 is None or len(kp1) < 10 or len(kp2) < 10:
+        print("[refine] Too few SIFT keypoints")
+        return None
+
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    raw_matches = bf.knnMatch(des1, des2, k=2)
+    good = [m for m, n in raw_matches if m.distance < ratio_thresh * n.distance]
+    if len(good) < min_inliers:
+        print(f"[refine] Only {len(good)} good matches (need {min_inliers})")
+        return None
+
+    pts_bg = np.float64([kp1[m.queryIdx].pt for m in good])   # in bg_img coords
+    pts_f0 = np.float64([kp2[m.trainIdx].pt for m in good])   # in (resized) f0 coords
+
+    # ── 2. Back-project bg_img points → 3D via y=y_plane ────────────────
+    K_inv = np.linalg.inv(K)
+    eye_bg = (-R_bg.T @ t_bg).flatten()                       # camera centre in world
+
+    obj_pts_3d = []
+    valid_idx = []
+    for i, (u, v) in enumerate(pts_bg):
+        # Ray in camera coords
+        ray_cam = K_inv @ np.array([u, v, 1.0])
+        # Ray in world coords
+        ray_world = R_bg.T @ ray_cam
+        # Intersect with y = y_plane
+        # eye_bg[1] + t * ray_world[1] = y_plane
+        if abs(ray_world[1]) < 1e-9:
+            continue  # ray parallel to plane, skip
+        t_param = (y_plane - eye_bg[1]) / ray_world[1]
+        if t_param <= 0:
+            continue  # behind camera, skip
+        pt3d = eye_bg + t_param * ray_world
+        obj_pts_3d.append(pt3d)
+        valid_idx.append(i)
+
+    if len(obj_pts_3d) < min_inliers:
+        print(f"[refine] Only {len(obj_pts_3d)} points project to y={y_plane} plane")
+        return None
+
+    obj_pts = np.array(obj_pts_3d, dtype=np.float64)
+    img_pts = pts_f0[valid_idx]
+
+    # If we resized frame0, scale img_pts back to original video coords
+    if frame0_resized:
+        img_pts[:, 0] *= scale_x
+        img_pts[:, 1] *= scale_y
+
+    # ── 3. solvePnP with RANSAC ─────────────────────────────────────────
+    dist_coeffs = np.zeros(5)
+    # Use bg pose as initial guess
+    rvec_init, _ = cv2.Rodrigues(R_bg)
+    ok, rvec, tvec, inlier_mask = cv2.solvePnPRansac(
+        obj_pts, img_pts, K, dist_coeffs,
+        rvec=rvec_init.copy(), tvec=t_bg.reshape(3, 1).copy(),
+        useExtrinsicGuess=True,
+        iterationsCount=2000,
+        reprojectionError=ransac_reproj,
+        flags=cv2.SOLVEPNP_ITERATIVE,
+    )
+    if not ok or inlier_mask is None:
+        print("[refine] solvePnPRansac failed")
+        return None
+
+    # inlier_mask from solvePnPRansac is an array of inlier INDICES (Nx1)
+    inlier_indices = inlier_mask.flatten()
+    n_inliers = len(inlier_indices)
+    if n_inliers < min_inliers:
+        print(f"[refine] Only {n_inliers} PnP inliers (need {min_inliers})")
+        return None
+
+    # ── 4. Refine with inliers only ─────────────────────────────────────
+    ok2, rvec, tvec = cv2.solvePnP(
+        obj_pts[inlier_indices], img_pts[inlier_indices], K, dist_coeffs,
+        rvec=rvec.copy(), tvec=tvec.copy(),
+        useExtrinsicGuess=True,
+        flags=cv2.SOLVEPNP_ITERATIVE,
+    )
+
+    R_mat, _ = cv2.Rodrigues(rvec)
+    t_vec = tvec.flatten()
+
+    # Compute reprojection error on inliers
+    proj, _ = cv2.projectPoints(
+        obj_pts[inlier_indices], rvec, tvec, K, dist_coeffs)
+    reproj = np.linalg.norm(
+        proj.reshape(-1, 2) - img_pts[inlier_indices], axis=1)
+    mean_err = float(reproj.mean())
+
+    return {
+        "R": R_mat,
+        "t": t_vec,
+        "n_matches": len(good),
+        "n_inliers": n_inliers,
+        "reproj_err": mean_err,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -1,5 +1,5 @@
 ================================================================================
-ViRheometry Project Status — 2026-04-15
+ViRheometry Project Status — 2026-04-16
 ================================================================================
 
 1. PROJECT OVERVIEW
@@ -233,8 +233,65 @@ CMA-ES Tonkatsu2 (Stage 2 example):
       --sigma0 0.5 --popsize 16 --maxiter 700 --seed 42
 
 
-9. KNOWN ISSUES / OPEN QUESTIONS
-==================================
+9. CALIBRATION PIPELINE (2026-04-16)
+======================================
+
+9.1 Architecture
+  Two scripts, clear separation of concerns:
+
+  prepare_configs.py  (production pipeline)
+    Input:  video.mov + background.JPG + settings.xml
+    Output: config_00..08.png (binary masks) + camera_params.xml
+    Steps:  Frame picker GUI → Cube vertex picker GUI → ROI polygon GUI
+            → VFR-safe frame extraction → binarisation → camera export
+    Default camera refinement: --refine edge (two-phase)
+
+  test_pipeline.py  (validation pipeline)
+    Wraps prepare_configs.py + Simulation/main.py (subprocess).
+    Additional outputs: diff_sim_vs_auto/, diff_sim_vs_ps/,
+    diff_auto_vs_ps/, overview_3way.png (3-way comparison grid).
+
+  pipeline.py  (core library)
+    All projection, rendering, edge-based refinement, IoU computation.
+
+9.2 Camera Extrinsic Refinement (Two-Phase)
+  Phase 1 — Chamfer distance minimisation (L-BFGS-B)
+    Renders ALL edges of ALL visible faces (not just silhouette).
+    Interior edges act as natural regularisation against camera drift.
+    Bounds: ±1° rotation, ±1cm translation from ChArUco baseline.
+
+  Phase 2 — IoU fine-tuning (Nelder-Mead)
+    Tiny simplex initialised from Phase 1 result.
+    Step: ~0.15° rotation, 1.5mm translation.
+    Accepts Phase 2 only if IoU improves over Phase 1.
+
+  Safety clamp: reject refinement if total deviation > 2°/2cm.
+
+  Key finding: silhouette-only edges FAIL — interior edges provide
+  critical regularisation. Pure IoU landscape is too flat for direct
+  optimisation.
+
+9.3 Validation Results (3 datasets, 2026-04-16)
+  Dataset             Sim vs Auto   Sim vs PS   Auto vs PS
+  2.1×6.5 1st         0.9176*       —           —
+  2.1×6.5 2nd         0.8573        —           —
+  2.5×3.0              0.7773        0.7795      0.8924
+  6.7×3.5              0.7753        0.8867      0.8226
+  *after manual PS shadow removal on config_01
+
+  HB parameters used:
+  - 2.1×6.5: n=0.530, η=33.28, σ_y=40.57, frame0=3663
+  - 2.5×3.0: n=0.62, η=20.0, σ_y=52.58, auto-frame0
+  - 6.7×3.5: n=0.62, η=20.0, σ_y=52.58, auto-frame0
+
+9.4 Known Calibration Issues
+  - Shadow artefacts in auto-segmentation reduce IoU (config_01 most affected)
+  - Camera position drift between trials (~1.46cm for 2.1×6.5 1st vs 2nd)
+  - 2.5×3.0 and 6.7×3.5 use placeholder HB params (not material-matched)
+
+
+10. KNOWN ISSUES / OPEN QUESTIONS
+===================================
 
 a) φ-space misrouting (~20% of new LHS samples go to non-source clusters)
    → causes mild degradation of ~20 previously-stable experts per round
