@@ -32,6 +32,21 @@ Optimization/moe_workspace*_data.csv
 
 # CMA-ES optimization result directories
 result_setup*/
+result_tonkatsu*/
+Optimization/result_*/
+
+# Reference experiment data (large binary images)
+data/ref_*/
+
+# Build artifacts (platform-specific)
+Simulation/GLRender3d/build_win*/
+Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/build_win*/
+
+# MoE workspace (entire directory — models + data + archives)
+Optimization/moe_workspace/
+
+# Old MoE workspaces (superseded)
+Optimization/moe_workspace[0-9]*/
 
 # Claude session files
 .claude/

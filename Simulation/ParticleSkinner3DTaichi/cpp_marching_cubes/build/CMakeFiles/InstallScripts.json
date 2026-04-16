@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/cglab/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

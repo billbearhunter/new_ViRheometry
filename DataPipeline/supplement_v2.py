@@ -98,6 +98,11 @@ def main():
     ap.add_argument("--candidates-only", action="store_true",
                     help="Only generate candidates, do not simulate")
     ap.add_argument("--flush-every", type=int, default=20)
+    ap.add_argument("--resume", action="store_true",
+                    help="Resume: skip the first N rows of candidates where N is "
+                         "the current row count in out-results (minus header)")
+    ap.add_argument("--stop-after", type=int, default=None,
+                    help="Stop after this many total completed rows (for partial runs)")
     args = ap.parse_args()
 
     workspace = args.workspace.resolve()
@@ -108,21 +113,41 @@ def main():
     plan.to_csv(workspace / "supplement_v2.plan.csv", index=False)
     log.info(f"Saved plan: {workspace / 'supplement_v2.plan.csv'}")
 
-    # Step 2: generate candidates
-    log.info("Generating LHS candidates...")
-    cands = generate_candidates(plan, workspace)
-    if cands.empty:
-        log.error("No candidates generated")
-        return
-    args.out_candidates.parent.mkdir(parents=True, exist_ok=True)
-    cands.to_csv(args.out_candidates, index=False)
-    log.info(f"Saved {len(cands)} candidates -> {args.out_candidates}")
+    # Step 2: generate candidates (reuse existing file if --resume to keep same RNG order)
+    if args.resume and args.out_candidates.exists():
+        cands = pd.read_csv(args.out_candidates)
+        log.info(f"[RESUME] Reusing existing candidates: {len(cands)} rows")
+    else:
+        log.info("Generating LHS candidates...")
+        cands = generate_candidates(plan, workspace)
+        if cands.empty:
+            log.error("No candidates generated")
+            return
+        args.out_candidates.parent.mkdir(parents=True, exist_ok=True)
+        cands.to_csv(args.out_candidates, index=False)
+        log.info(f"Saved {len(cands)} candidates -> {args.out_candidates}")
 
     if args.candidates_only:
         log.info("Candidates-only mode, stopping.")
         return
 
-    # Step 3: simulate
+    # Step 3: determine starting offset
+    skip = 0
+    if args.resume and args.out_results.exists():
+        skip = sum(1 for _ in open(args.out_results)) - 1  # subtract header
+        skip = max(skip, 0)
+        log.info(f"[RESUME] Skipping first {skip} rows (already saved)")
+        cands = cands.iloc[skip:].reset_index(drop=True)
+
+    # Optional truncation for partial runs
+    if args.stop_after is not None:
+        target_remaining = args.stop_after - skip
+        if target_remaining <= 0:
+            log.info(f"[STOP-AFTER] Already at {skip} >= {args.stop_after}. Nothing to run.")
+            return
+        cands = cands.iloc[:target_remaining].reset_index(drop=True)
+        log.info(f"[STOP-AFTER] Will run {len(cands)} sims then stop at total={args.stop_after}")
+
     log.info(f"Running {len(cands)} MPM simulations (flush every {args.flush_every})...")
     run_simulations(cands, args.out_results, flush_every=args.flush_every)
 
