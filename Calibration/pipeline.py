@@ -298,55 +298,73 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
     # ── 2. Helper: render cube edges as pixel list ──────────────────────
     verts_3d = _cube_verts(fluid_w, fluid_h)
 
-    def _render_edge_pixels(R_mat, t_vec):
-        """Project all edges of visible faces → pixel coords."""
+    def _render_edge_pixels_per_face(R_mat, t_vec):
+        """Project edges of each visible face → list of per-face pixel arrays.
+
+        Returns a list of arrays, one per visible face.  Each face's array
+        has shape (N_i, 2) with pixel (x, y) coordinates.  Returning per-face
+        arrays (instead of one big vstack) lets the chamfer cost normalise
+        per face so that short edges (e.g. the top cap) get the same weight
+        as long edges (e.g. the bottom edge).
+        """
         pv = _project_KRt(verts_3d, K, R_mat, t_vec)
         if np.any(np.isnan(pv)):
-            return np.zeros((0, 2))
+            return []
         eye = (-R_mat.T @ t_vec).flatten()
-        edge_px = []
+        face_pixels = []
         for fi, face in enumerate(_CUBE_FACES):
             center = verts_3d[face].mean(axis=0)
             if _FACE_NORMALS[fi] @ (eye - center) <= 0:
                 continue
             corners = pv[face]
+            segs = []
             for j in range(len(corners)):
                 p0 = corners[j]
                 p1 = corners[(j + 1) % len(corners)]
                 n_pts = max(2, int(np.linalg.norm(p1 - p0)))
                 ts = np.linspace(0, 1, n_pts)
                 line = np.outer(1 - ts, p0) + np.outer(ts, p1)
-                edge_px.append(line)
-        if not edge_px:
-            return np.zeros((0, 2))
-        return np.vstack(edge_px)
+                segs.append(line)
+            if segs:
+                face_pixels.append(np.vstack(segs))
+        return face_pixels
 
-    # ── 3. Phase 1: Chamfer distance (L-BFGS-B) ────────────────────────
-    def chamfer_cost(params):
-        rvec = params[:3]
-        tvec = params[3:6]
-        R_mat = Rot.from_rotvec(rvec).as_matrix()
-        pixels = _render_edge_pixels(R_mat, tvec)
-        if len(pixels) == 0:
-            return 1e6
+    def _bilinear_dt(pixels):
+        """Sample the chamfer distance field with bilinear interpolation."""
         px = np.clip(pixels[:, 0], 0, W - 1.001)
         py = np.clip(pixels[:, 1], 0, H - 1.001)
         ix = px.astype(int); iy = py.astype(int)
         fx = px - ix; fy = py - iy
         ix1 = np.minimum(ix + 1, W - 1)
         iy1 = np.minimum(iy + 1, H - 1)
-        d = (dt[iy, ix] * (1 - fx) * (1 - fy) +
-             dt[iy, ix1] * fx * (1 - fy) +
-             dt[iy1, ix] * (1 - fx) * fy +
-             dt[iy1, ix1] * fx * fy)
-        return float(d.mean())
+        return (dt[iy, ix] * (1 - fx) * (1 - fy) +
+                dt[iy, ix1] * fx * (1 - fy) +
+                dt[iy1, ix] * (1 - fx) * fy +
+                dt[iy1, ix1] * fx * fy)
+
+    # ── 3. Phase 1: Chamfer distance (L-BFGS-B) ────────────────────────
+    #   Per-face normalised: mean chamfer of each visible face, then
+    #   average across faces.  This prevents long edges (bottom, left wall)
+    #   from dominating and ensures short edges (top cap) have equal pull.
+    def chamfer_cost(params):
+        rvec = params[:3]
+        tvec = params[3:6]
+        R_mat = Rot.from_rotvec(rvec).as_matrix()
+        face_pixels = _render_edge_pixels_per_face(R_mat, tvec)
+        if not face_pixels:
+            return 1e6
+        face_means = []
+        for fp in face_pixels:
+            d = _bilinear_dt(fp)
+            face_means.append(float(d.mean()))
+        return float(np.mean(face_means))
 
     rvec0 = Rot.from_matrix(R_init).as_rotvec()
     x0 = np.concatenate([rvec0, t_init.flatten()])
     cost_before = chamfer_cost(x0)
 
-    rot_margin = np.radians(1.0)
-    t_margin   = 0.01   # metres (1 cm)
+    rot_margin = np.radians(2.5)
+    t_margin   = 0.02   # metres (2 cm)
     lb = np.concatenate([rvec0 - rot_margin, t_init.flatten() - t_margin])
     ub = np.concatenate([rvec0 + rot_margin, t_init.flatten() + t_margin])
 
@@ -402,11 +420,13 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
         iou_after = iou_before
 
     # Safety clamp: reject if too far from baseline
+    # ChArUco can be off by ~2-3° when the board is far from the container,
+    # so we allow up to 3° rotation / 3 cm translation before rejecting.
     rvec_out = x_final[:3]
     t_out    = x_final[3:6]
     rot_dev = np.degrees(np.linalg.norm(rvec_out - rvec0))
     t_dev   = np.linalg.norm(t_out - t_init.flatten()) * 100.0  # cm
-    if rot_dev > 2.0 or t_dev > 2.0:
+    if rot_dev > 3.0 or t_dev > 3.0:
         print(f"[edge] WARNING: refinement drifted "
               f"(rot={rot_dev:.2f}°, t={t_dev:.2f}cm) — keeping ChArUco")
         return {
