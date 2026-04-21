@@ -40,6 +40,59 @@ from scipy.spatial.transform import Rotation as R
 
 
 # ═══════════════════════════════════════════════════════════════
+#  settings.xml parser  (shared by prepare_configs + recalibrate_only)
+# ═══════════════════════════════════════════════════════════════
+
+def _parse_settings_xml(path: str) -> dict:
+    """
+    Parse <setup W=… H=…> AND infer cube depth from the static_box bounds
+    that act as the front/back container walls (z-axis).
+
+    Returns: {"W": cm, "H": cm, "depth": cm or None}
+    """
+    out = {"W": None, "H": None, "depth": None}
+    try:
+        root = ET.parse(path).getroot()
+
+        # Setup block: container W/H
+        s = root.find("setup")
+        if s is not None:
+            try: out["W"] = float(s.attrib.get("W"))
+            except Exception: pass
+            try: out["H"] = float(s.attrib.get("H"))
+            except Exception: pass
+
+        # Static walls perpendicular to z (small z extent → walls):
+        # the inner faces of those walls bound the fluid in z.
+        z_inner_lo, z_inner_hi = None, None
+        for sb in root.findall("static_box"):
+            try:
+                mn = [float(v) for v in sb.attrib["min"].split()]
+                mx = [float(v) for v in sb.attrib["max"].split()]
+            except Exception:
+                continue
+            dz = abs(mx[2] - mn[2])
+            dx = abs(mx[0] - mn[0])
+            dy = abs(mx[1] - mn[1])
+            # A z-wall is thin in z but reasonably extended in x and y.
+            if dz < 1.0 and dx > 0.5 and dy > 0.5:
+                # The face nearer the fluid (interior of [mn[2], mx[2]])
+                # If the wall is at negative z (front), inner face = max
+                # If the wall is at z>~half-domain (back), inner face = min
+                # Use a simple heuristic: if mx[2] <= 0.5 → front wall; else back.
+                if mx[2] <= 0.5:
+                    z_inner_lo = max(z_inner_lo, mx[2]) if z_inner_lo is not None else mx[2]
+                else:
+                    z_inner_hi = min(z_inner_hi, mn[2]) if z_inner_hi is not None else mn[2]
+
+        if z_inner_lo is not None and z_inner_hi is not None and z_inner_hi > z_inner_lo:
+            out["depth"] = z_inner_hi - z_inner_lo
+    except Exception as e:
+        print(f"[settings] WARN: parse failed: {e}")
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════
 #  ChArUco Board setup  (identical to Calibration.py)
 # ═══════════════════════════════════════════════════════════════
 
@@ -255,7 +308,11 @@ def detect_charuco(gray):
 
 def refine_extrinsic_edge(target_gray, K, R_init, t_init,
                           fluid_w, fluid_h, W, H,
-                          max_iter=200):
+                          max_iter=200,
+                          safety_rot_deg=3.0, safety_t_cm=3.0,
+                          left_weight=1.0, left_frac=0.5,
+                          top_weight=1.0, top_frac=0.5,
+                          bottom_weight=1.0, bottom_frac=0.5):
     """
     Stage 2 — Refine camera extrinsic (R, t) by minimising chamfer distance
     between RENDERED cube edges and DETECTED container edges in config_00,
@@ -294,6 +351,36 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
     target_fg = (target_gray < 128).astype(np.uint8)
     target_edges = cv2.Canny(target_fg * 255, 50, 150)
     dt = distance_transform_edt(target_edges == 0).astype(np.float64)
+
+    # ── 1b. Left-side emphasis split (based on target bbox) ─────────────
+    # When the target's right side has contamination (fluid tongue, shadow),
+    # we can down-weight right-side samples by giving left-side samples a
+    # higher multiplier.  `x_split` is derived from the target foreground
+    # bbox so the split follows the container regardless of image size.
+    if target_fg.any():
+        xs = np.where(target_fg.any(axis=0))[0]
+        x_min_fg = float(xs.min())
+        x_max_fg = float(xs.max())
+        x_split = x_min_fg + left_frac * (x_max_fg - x_min_fg)
+        ys = np.where(target_fg.any(axis=1))[0]
+        y_min_fg = float(ys.min())
+        y_max_fg = float(ys.max())
+        y_split     = y_min_fg + top_frac    * (y_max_fg - y_min_fg)
+        y_bot_split = y_max_fg - bottom_frac * (y_max_fg - y_min_fg)
+    else:
+        x_split     = W * left_frac
+        y_split     = H * top_frac
+        y_bot_split = H * (1.0 - bottom_frac)
+    if left_weight != 1.0:
+        print(f"[edge] Left-side   weighting active: x<{x_split:.0f} "
+              f"weighted {left_weight:.1f}x (left_frac={left_frac:.2f})")
+    if top_weight != 1.0:
+        print(f"[edge] Top-side    weighting active: y<{y_split:.0f} "
+              f"weighted {top_weight:.1f}x (top_frac={top_frac:.2f})")
+    if bottom_weight != 1.0:
+        print(f"[edge] Bottom-side weighting active: y>{y_bot_split:.0f} "
+              f"weighted {bottom_weight:.1f}x (bottom_frac={bottom_frac:.2f})")
+    _use_weights = (left_weight != 1.0) or (top_weight != 1.0) or (bottom_weight != 1.0)
 
     # ── 2. Helper: render cube edges as pixel list ──────────────────────
     verts_3d = _cube_verts(fluid_w, fluid_h)
@@ -356,7 +443,14 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
         face_means = []
         for fp in face_pixels:
             d = _bilinear_dt(fp)
-            face_means.append(float(d.mean()))
+            if _use_weights:
+                wl = np.where(fp[:, 0] < x_split,     left_weight,   1.0)
+                wt = np.where(fp[:, 1] < y_split,     top_weight,    1.0)
+                wb = np.where(fp[:, 1] > y_bot_split, bottom_weight, 1.0)
+                w  = wl * wt * wb
+                face_means.append(float((d * w).sum() / w.sum()))
+            else:
+                face_means.append(float(d.mean()))
         return float(np.mean(face_means))
 
     rvec0 = Rot.from_matrix(R_init).as_rotvec()
@@ -377,14 +471,35 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
     # ── 4. Phase 2: IoU fine-tuning (Nelder-Mead) ──────────────────────
     target_fg_bool = target_gray < 128
 
+    # Per-pixel weight map.  Multiplicative combination of x-axis (left) and
+    # y-axis (top) weights, so the top-left corner gets left_weight*top_weight.
+    if _use_weights:
+        wx = np.where(
+            np.arange(W, dtype=np.float64)[None, :] < x_split,
+            float(left_weight), 1.0,
+        )
+        y_grid = np.arange(H, dtype=np.float64)[:, None]
+        wy_top = np.where(y_grid < y_split,     float(top_weight),    1.0)
+        wy_bot = np.where(y_grid > y_bot_split, float(bottom_weight), 1.0)
+        wy = wy_top * wy_bot
+        w_map = wx * wy       # broadcasting → (H, W)
+    else:
+        w_map = None
+
     def neg_iou(params):
         rvec = params[:3]
         tvec = params[3:6]
         R_mat = Rot.from_rotvec(rvec).as_matrix()
         mask = render_mask_KRt(K, R_mat, tvec, fluid_w, fluid_h, W, H)
         pred = mask < 128
-        inter = np.count_nonzero(pred & target_fg_bool)
-        union = np.count_nonzero(pred | target_fg_bool)
+        inter_m = pred & target_fg_bool
+        union_m = pred | target_fg_bool
+        if w_map is None:
+            inter = np.count_nonzero(inter_m)
+            union = np.count_nonzero(union_m)
+        else:
+            inter = float((inter_m * w_map).sum())
+            union = float((union_m * w_map).sum())
         if union == 0:
             return 0.0
         return -inter / union
@@ -421,14 +536,19 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
 
     # Safety clamp: reject if too far from baseline
     # ChArUco can be off by ~2-3° when the board is far from the container,
-    # so we allow up to 3° rotation / 3 cm translation before rejecting.
+    # so we allow up to safety_rot_deg° rotation / safety_t_cm cm translation
+    # before rejecting (defaults: 3° / 3 cm; callers may relax when the
+    # target has been pre-cleaned or when the ChArUco prior is known to
+    # be farther off).
     rvec_out = x_final[:3]
     t_out    = x_final[3:6]
     rot_dev = np.degrees(np.linalg.norm(rvec_out - rvec0))
     t_dev   = np.linalg.norm(t_out - t_init.flatten()) * 100.0  # cm
-    if rot_dev > 3.0 or t_dev > 3.0:
+    if rot_dev > safety_rot_deg or t_dev > safety_t_cm:
         print(f"[edge] WARNING: refinement drifted "
-              f"(rot={rot_dev:.2f}°, t={t_dev:.2f}cm) — keeping ChArUco")
+              f"(rot={rot_dev:.2f}°, t={t_dev:.2f}cm; "
+              f"limits {safety_rot_deg:.1f}°/{safety_t_cm:.1f}cm) "
+              f"— keeping ChArUco")
         return {
             "R": R_init, "t": t_init.flatten(),
             "cost_before": cost_before, "cost_after": cost_before,

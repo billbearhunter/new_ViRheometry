@@ -151,10 +151,44 @@ def _load_bin(path: str, target_shape=None) -> np.ndarray | None:
 
 
 def _save_diff(ref: np.ndarray, test: np.ndarray, out_path: str) -> float:
-    """Save a pure black/white diff image and return IoU.
-    Convention: BLACK = pixels that agree, WHITE = pixels that differ (XOR)."""
-    diff = (ref ^ test).astype(np.uint8) * 255   # 255 where differ, 0 where same
-    cv2.imwrite(out_path, diff)
+    """Save both a colour-coded diff image AND a black/white XOR diff.
+    Returns IoU.
+
+    Given out_path `.../diff_XX.png`, this writes:
+        .../diff_XX.png       (colour)
+        .../diff_XX_bw.png    (black-and-white XOR, legacy)
+
+    Colour legend (BGR):
+        WHITE  (255,255,255) : neither has fluid (both background)
+        GRAY   (128,128,128) : both agree — fluid region (intersection)
+        RED    (  0,  0,255) : `ref` (a) has fluid, `test` (b) does not → a_only
+        BLUE   (255,  0,  0) : `test` (b) has fluid, `ref` (a) does not → b_only
+
+    For the Sim-vs-Auto diff where ref=Sim, test=Auto:
+        RED  = Sim flowed further / is thicker than the real video
+        BLUE = Video flowed further / is thicker than the sim
+
+    B/W legend (legacy):
+        BLACK (0)   : pixels that agree
+        WHITE (255) : pixels that differ (XOR)
+    """
+    H, W = ref.shape
+    # ── colour diff ──
+    out_color = np.full((H, W, 3), 255, dtype=np.uint8)     # start white
+    both = (ref & test).astype(bool)
+    a_only = (ref & ~test).astype(bool)
+    b_only = (test & ~ref).astype(bool)
+    out_color[both]   = (128, 128, 128)
+    out_color[a_only] = (0,   0,   255)
+    out_color[b_only] = (255, 0,   0)
+    cv2.imwrite(out_path, out_color)
+
+    # ── b/w XOR diff (kept for legacy tools) ──
+    root, ext = os.path.splitext(out_path)
+    bw_path = root + "_bw" + ext
+    out_bw = ((ref ^ test).astype(np.uint8)) * 255
+    cv2.imwrite(bw_path, out_bw)
+
     u = (ref | test).sum()
     return float((ref & test).sum() / u) if u else 0.0
 
@@ -166,7 +200,7 @@ def diff_pair(name_a: str, dir_a: str,
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     print(f"\n  {name_a:<8} vs {name_b:<8}  →  {out_dir}")
     print(f"  {'cfg':>4} {'IoU':>8} {name_a+'_fg':>10} {name_b+'_fg':>10} "
-          f"{'a_only':>8} {'b_only':>8}")
+          f"{'a_only':>8} {'b_only':>8} {'bias':>10}")
     ious, sizes_a, sizes_b = [], [], []
     for i in range(n_configs):
         pa = os.path.join(dir_a, f"config_{i:02d}.png")
@@ -180,9 +214,22 @@ def diff_pair(name_a: str, dir_a: str,
         out = os.path.join(out_dir, f"diff_{i:02d}.png")
         iou = _save_diff(a, b, out)
         ious.append(iou); sizes_a.append(int(a.sum())); sizes_b.append(int(b.sum()))
-        ao = (a & ~b).sum(); bo = (b & ~a).sum()
+        ao = int((a & ~b).sum()); bo = int((b & ~a).sum())
+        # Bias arrow: who flowed further / is larger
+        if ao + bo == 0:
+            bias = "="
+        elif ao >= 2 * max(bo, 1):
+            bias = f"{name_a}++"
+        elif bo >= 2 * max(ao, 1):
+            bias = f"{name_b}++"
+        elif ao > bo:
+            bias = f"{name_a}+"
+        elif bo > ao:
+            bias = f"{name_b}+"
+        else:
+            bias = "="
         print(f"  {i:>4} {iou:>8.4f} {int(a.sum()):>10d} {int(b.sum()):>10d} "
-              f"{int(ao):>8d} {int(bo):>8d}")
+              f"{ao:>8d} {bo:>8d} {bias:>10}")
     if ious:
         print(f"  {'mean':>4} {np.mean(ious):>8.4f}")
     return {"ious": ious, "sizes_a": sizes_a, "sizes_b": sizes_b}

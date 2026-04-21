@@ -64,6 +64,10 @@ from typing import Optional
 import cv2
 import numpy as np
 
+# settings.xml parser is defined in pipeline.py and re-exported here so
+# callers can still do `from prepare_configs import _parse_settings_xml`.
+from pipeline import _parse_settings_xml  # noqa: F401
+
 
 # ── Defaults ─────────────────────────────────────────────────────────────
 RAW_FPS       = 240       # iPhone slow-mo nominal frame rate
@@ -590,6 +594,103 @@ def pick_roi_polygon(
     return np.array(points, dtype=np.int32)
 
 
+def pick_polygon_on_image(
+    image_bgr: np.ndarray,
+    window_name: str = "Draw polygon",
+    initial_poly: Optional[np.ndarray] = None,
+    instructions: Optional[list] = None,
+) -> np.ndarray:
+    """
+    Open a window on a SINGLE static image.  User draws a polygon that
+    encloses a region (e.g. the CLEAN left-side container outline for
+    camera calibration).
+
+    Controls:
+      L-click     : add vertex
+      R-click     : undo last vertex
+      C           : clear all vertices
+      Enter/Space : confirm (need ≥ 3)
+      Esc         : cancel
+
+    Returns (N, 2) int32 polygon in ORIGINAL image coordinates, or empty
+    array if cancelled.
+    """
+    h, w = image_bgr.shape[:2]
+    scale = 1.0
+    if w > 1400:
+        scale = 1400.0 / w
+    disp_w, disp_h = int(w * scale), int(h * scale)
+
+    points: list[tuple[int, int]] = []
+    if initial_poly is not None and len(initial_poly) >= 3:
+        for p in initial_poly:
+            points.append((int(p[0]), int(p[1])))
+
+    done = False
+    cancelled = False
+
+    def mouse_cb(event, x, y, flags, param):
+        nonlocal points
+        ox, oy = int(x / scale), int(y / scale)
+        if event == cv2.EVENT_LBUTTONDOWN:
+            points.append((ox, oy))
+        elif event == cv2.EVENT_RBUTTONDOWN and points:
+            points.pop()
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, disp_w, disp_h)
+    cv2.setMouseCallback(window_name, mouse_cb)
+
+    print("\n" + "=" * 60)
+    print(f"  {window_name.upper()}")
+    print("=" * 60)
+    if instructions:
+        for line in instructions:
+            print(f"  {line}")
+        print("-" * 60)
+    print("  L-click     : add vertex    |  R-click : undo last")
+    print("  C           : clear all")
+    print("  Enter/Space : confirm (need ≥ 3)   |  Esc : cancel")
+    print("=" * 60 + "\n")
+
+    while not done:
+        canvas = image_bgr.copy()
+        for i, pt in enumerate(points):
+            cv2.circle(canvas, pt, 6, (0, 255, 0), -1)
+            cv2.putText(canvas, str(i), (pt[0] + 10, pt[1] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            if i > 0:
+                cv2.line(canvas, points[i - 1], pt, (0, 255, 0), 2)
+        if len(points) >= 3:
+            cv2.line(canvas, points[-1], points[0], (0, 255, 0), 1)
+            overlay = canvas.copy()
+            pts_arr = np.array(points, dtype=np.int32).reshape(-1, 1, 2)
+            cv2.fillPoly(overlay, [pts_arr], (0, 200, 0))
+            canvas = cv2.addWeighted(canvas, 0.7, overlay, 0.3, 0)
+
+        info = f"Vertices: {len(points)}  (need ≥ 3; Enter to confirm)"
+        cv2.putText(canvas, info, (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        disp = cv2.resize(canvas, (disp_w, disp_h))
+        cv2.imshow(window_name, disp)
+        key = cv2.waitKey(20) & 0xFF
+        if key == 27:                    # Esc
+            cancelled = True; done = True
+        elif key in (13, 32):            # Enter / Space
+            if len(points) >= 3:
+                done = True
+            else:
+                print("[poly] Need at least 3 points. Keep clicking.")
+        elif key in (ord('c'), ord('C')):
+            points.clear()
+
+    cv2.destroyWindow(window_name)
+    if cancelled or len(points) < 3:
+        return np.array([], dtype=np.int32)
+    return np.array(points, dtype=np.int32)
+
+
 # ── Interactive cube-vertex picker ───────────────────────────────────────
 #
 # Cube coordinate system used by the simulation:
@@ -1040,6 +1141,7 @@ def binarize_frame(
     frame: np.ndarray,
     roi_mask: np.ndarray,
     v_thresh: int = V_THRESH,
+    dilate_px: int = 0,
 ) -> np.ndarray:
     """
     Binarize a single frame: dark pixels inside ROI → black, everything else → white.
@@ -1096,6 +1198,15 @@ def binarize_frame(
 
     # Final light cleanup
     filled = cv2.morphologyEx(filled, cv2.MORPH_OPEN, k5, iterations=1)
+
+    # Optional outward dilation — recovers the glass-reflection rim when
+    # V-thresh alone can't reach pixels brighter than v_thresh.  Clipped
+    # back to ROI so it can't spill into the table.
+    if dilate_px > 0:
+        k_d = 2 * dilate_px + 1
+        kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_d, k_d))
+        filled = cv2.dilate(filled, kern, iterations=1)
+        filled = cv2.bitwise_and(filled, roi_mask)
 
     # Output: white background, black foreground
     return 255 - filled
@@ -1185,6 +1296,11 @@ def parse_args() -> argparse.Namespace:
     # Threshold tuning
     p.add_argument("--v-thresh", type=int, default=V_THRESH,
                    help=f"V-channel threshold for dark pixels (default: {V_THRESH})")
+    p.add_argument("--dilate", type=int, default=0, metavar="PX",
+                   help="Dilate the binary mask by PX pixels after "
+                        "morphological cleanup (clipped to ROI). Useful "
+                        "when V-thresh can't reach the glass-reflection rim "
+                        "around the fluid. Default: 0 (disabled).")
 
     # Output options
     p.add_argument("--save-debug", action="store_true",
@@ -1236,6 +1352,27 @@ def parse_args() -> argparse.Namespace:
                             "  'edge' (default) → minimise chamfer distance between "
                             "rendered cube edges and config_00 container edges. "
                             "K fixed, only R,t adjusted.")
+    calib.add_argument("--calib-poly", type=str, default=None, metavar="NPY",
+                       help="Load a saved CALIBRATION polygon (.npy, shape (N,2)) "
+                            "drawn on frame 0.  The polygon encloses ONLY the "
+                            "clean container outline (exclude fluid tongue, hand "
+                            "shadow, etc).  Pixels outside the polygon are set "
+                            "to white (background) BEFORE camera calibration, "
+                            "so the optimiser fits only trustworthy edges. "
+                            "Original config_00.png is untouched.")
+    calib.add_argument("--calib-poly-pick", action="store_true",
+                       help="Open an interactive polygon picker on frame 0 "
+                            "(after frame 0 is selected).  Draw around the "
+                            "clean container outline, skip contaminated right "
+                            "side.  Saved to <out_dir>/calib_target_poly.npy.")
+    calib.add_argument("--safety-rot-deg", type=float, default=3.0,
+                       help="Reject edge-refinement if rotation drift from "
+                            "ChArUco exceeds this many degrees. Default: 3.0. "
+                            "Relax (e.g. 5.0–6.0) when the ChArUco prior is "
+                            "known to be farther off than usual.")
+    calib.add_argument("--safety-t-cm", type=float, default=3.0,
+                       help="Reject edge-refinement if translation drift from "
+                            "ChArUco exceeds this many cm. Default: 3.0.")
     calib.add_argument("--left-face-corners", type=str, default=None, metavar="NPY",
                        help="Load saved 4-corner LEFT-face picks from .npy.")
     # Deprecated alias kept for back-compat
@@ -1492,10 +1629,13 @@ def main() -> None:
     print(f"[ROI] Polygon: {len(poly)} verts, area={int(roi_mask.sum()//255)} px")
 
     # ── Step 4: Process each frame (binarize + save config_XX.png) ───────
-    print(f"\n[process] Binarizing {args.n_configs} frames (V < {args.v_thresh})...")
+    dilate_note = f", dilate={args.dilate}px" if args.dilate > 0 else ""
+    print(f"\n[process] Binarizing {args.n_configs} frames (V < {args.v_thresh}{dilate_note})...")
     for config_idx, frame_idx in enumerate(frame_indices):
         frame = read_frame(cap, frame_idx)
-        binary = binarize_frame(frame, roi_mask, v_thresh=args.v_thresh)
+        binary = binarize_frame(frame, roi_mask,
+                                v_thresh=args.v_thresh,
+                                dilate_px=args.dilate)
 
         out_path = out_dir / f"config_{config_idx:02d}.png"
         _imwrite_with_icc(str(out_path), binary, icc_profile)
@@ -1520,6 +1660,46 @@ def main() -> None:
         if os.path.abspath(args.settings_xml) != os.path.abspath(str(dst)):
             shutil.copy2(args.settings_xml, dst)
             print(f"[settings] Copied settings.xml → {dst}")
+
+    # ── Step 4b: (optional) Calibration polygon ─────────────────────────
+    # User draws a polygon on frame 0 (BGR) around the CLEAN container
+    # outline, excluding contaminated regions (fluid tongue, hand shadow).
+    # The resulting polygon is used ONLY for camera calibration: pixels
+    # outside the polygon in config_00 are forced to white (background)
+    # before being fed to the calibration optimiser.
+    # config_00.png on disk is NOT modified.
+    calib_poly = None
+    calib_poly_save = str(out_dir / "calib_target_poly.npy")
+    if args.calib_poly is not None:
+        calib_poly = np.load(args.calib_poly).astype(np.int32)
+        print(f"[calib-poly] Loaded {args.calib_poly} ({len(calib_poly)} verts)")
+        if os.path.abspath(args.calib_poly) != os.path.abspath(calib_poly_save):
+            np.save(calib_poly_save, calib_poly)
+            print(f"[calib-poly] Copied to {calib_poly_save}")
+    elif args.calib_poly_pick and args.bg_img and not args.skip_calib:
+        # Re-open video and grab frame 0 for the picker
+        cap_cp = open_video(args.video)
+        frame0_for_pick = read_frame(cap_cp, frame0_idx)
+        cap_cp.release()
+        if frame0_for_pick is not None:
+            instructions = [
+                "Draw ONLY around the CLEAN container outline on frame 0.",
+                "Include: left-wall edges, top rim, front-bottom edge, LEFT vertices.",
+                "EXCLUDE: fluid 'tongue' spilling right, hand shadow, anything outside container.",
+                "Tighter polygon = cleaner calibration (but keep the container fully inside).",
+            ]
+            calib_poly = pick_polygon_on_image(
+                frame0_for_pick,
+                window_name=f"Calibration polygon on frame {frame0_idx}",
+                instructions=instructions,
+            )
+            if len(calib_poly) >= 3:
+                np.save(calib_poly_save, calib_poly)
+                print(f"[calib-poly] Saved → {calib_poly_save} "
+                      f"({len(calib_poly)} verts)")
+            else:
+                print("[calib-poly] Cancelled — using full config_00 for calibration")
+                calib_poly = None
 
     # ── Step 5: Camera calibration ──
     # config_00.png is passed only as a sanity-check target (for IoU print +
@@ -1547,6 +1727,9 @@ def main() -> None:
             refine_mode=args.refine,
             video_h=h_f, video_w=w_f,
             frame0_bgr=frame0_bgr,
+            calib_target_poly=calib_poly,
+            safety_rot_deg=args.safety_rot_deg,
+            safety_t_cm=args.safety_t_cm,
         )
     else:
         print(f"       Next: run pipeline.py --calib_img background.png "
@@ -1560,54 +1743,7 @@ def main() -> None:
             print(f"[WARN] --validate dir not found: {args.validate}")
 
 
-def _parse_settings_xml(path: str) -> dict:
-    """
-    Parse <setup W=… H=…> AND infer cube depth from the static_box bounds
-    that act as the front/back container walls (z-axis).
-
-    Returns: {"W": cm, "H": cm, "depth": cm or None}
-    """
-    import xml.etree.ElementTree as ET
-    out = {"W": None, "H": None, "depth": None}
-    try:
-        root = ET.parse(path).getroot()
-
-        # Setup block: container W/H
-        s = root.find("setup")
-        if s is not None:
-            try: out["W"] = float(s.attrib.get("W"))
-            except Exception: pass
-            try: out["H"] = float(s.attrib.get("H"))
-            except Exception: pass
-
-        # Static walls perpendicular to z (small z extent → walls):
-        # the inner faces of those walls bound the fluid in z.
-        z_inner_lo, z_inner_hi = None, None
-        for sb in root.findall("static_box"):
-            try:
-                mn = [float(v) for v in sb.attrib["min"].split()]
-                mx = [float(v) for v in sb.attrib["max"].split()]
-            except Exception:
-                continue
-            dz = abs(mx[2] - mn[2])
-            dx = abs(mx[0] - mn[0])
-            dy = abs(mx[1] - mn[1])
-            # A z-wall is thin in z but reasonably extended in x and y.
-            if dz < 1.0 and dx > 0.5 and dy > 0.5:
-                # The face nearer the fluid (interior of [mn[2], mx[2]])
-                # If the wall is at negative z (front), inner face = max
-                # If the wall is at z>~half-domain (back), inner face = min
-                # Use a simple heuristic: if mx[2] <= 0.5 → front wall; else back.
-                if mx[2] <= 0.5:
-                    z_inner_lo = max(z_inner_lo, mx[2]) if z_inner_lo is not None else mx[2]
-                else:
-                    z_inner_hi = min(z_inner_hi, mn[2]) if z_inner_hi is not None else mn[2]
-
-        if z_inner_lo is not None and z_inner_hi is not None and z_inner_hi > z_inner_lo:
-            out["depth"] = z_inner_hi - z_inner_lo
-    except Exception as e:
-        print(f"[settings] WARN: parse failed: {e}")
-    return out
+# _parse_settings_xml lives in pipeline.py (imported at the top of this file).
 
 
 def _run_camera_calibration(
@@ -1623,6 +1759,9 @@ def _run_camera_calibration(
     refine_mode: str = "extrinsic-charuco",
     video_h: int = 1080, video_w: int = 1920,
     frame0_bgr: Optional[np.ndarray] = None,
+    calib_target_poly: Optional[np.ndarray] = None,
+    safety_rot_deg: float = 3.0,
+    safety_t_cm: float = 3.0,
 ) -> None:
     """
     Camera calibration:
@@ -1692,6 +1831,23 @@ def _run_camera_calibration(
         print(f"[calib] ERROR: cannot read config_00.png")
         return
     tgt_H, tgt_W = target.shape
+
+    # ── Optional: apply user-drawn calibration polygon to target ─────────
+    #   Pixels OUTSIDE the polygon are forced to white (255 = background)
+    #   so the calibration optimiser only sees the clean container outline.
+    #   config_00.png on disk is not touched — this is purely in-memory.
+    if calib_target_poly is not None and len(calib_target_poly) >= 3:
+        poly_mask = np.zeros_like(target)
+        cv2.fillPoly(poly_mask, [calib_target_poly.reshape(-1, 1, 2)], 255)
+        # Inside polygon: keep original; outside: force white
+        target = np.where(poly_mask > 0, target, np.uint8(255))
+        # Save what the calibrator sees for debugging
+        debug_path = os.path.join(out_dir, "config_00_for_calib.png")
+        cv2.imwrite(debug_path, target)
+        inside_area = int((poly_mask > 0).sum())
+        print(f"[calib] Applied calibration polygon ({len(calib_target_poly)} "
+              f"verts, {inside_area} px inside)")
+        print(f"[calib] Target with polygon applied → {debug_path}")
 
     # ── Step 4a: ChArUco calibration ─────────────────────────────────────
     print("\n[calib] Step 4a: ChArUco calibration on background image...")
@@ -1767,6 +1923,8 @@ def _run_camera_calibration(
         result = refine_extrinsic_edge(
             target, K_init, R_init, t_init,
             fw_m, fh_m, tgt_W, tgt_H,
+            safety_rot_deg=safety_rot_deg,
+            safety_t_cm=safety_t_cm,
         )
         if result is not None:
             c0 = result["cost_before"]
