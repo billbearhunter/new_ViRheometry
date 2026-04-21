@@ -30,24 +30,63 @@ class MPMEmulator:
     def __init__(self,
                  base_path='results',
                  GL_render_path=None,
-                 xml_config_path="config/setting.xml"):
+                 xml_config_path="config/setting.xml",
+                 camera_params=None):
         """
         OBJ renderer with config-specific displacement value passing and XML camera config.
-        
+
         Args:
             base_path: Root directory containing simulation results
             GL_render_path: Path to rendering executable
-            xml_config_path: Path to the XML configuration file
+            xml_config_path: Path to MPM setting.xml (only used when camera_params is None,
+                             to preserve legacy behaviour).
+            camera_params:   Optional dict from load_camera_params(camera_params.xml).
+                             Keys: 'eyepos' (list of 3 floats), 'quat' (list of 4 floats),
+                             'window_size' (tuple of 2 ints), 'fov' (float).
+                             When provided, the renderer uses these values directly and
+                             ignores xml_config_path. This is the correct pathway — the
+                             calibrated camera_params.xml IS the camera used for projection.
         """
         self.base_path = base_path
         self.GL_render_path = GL_render_path or _detect_gl_render_path()
         self.xml_config_path = xml_config_path
-        
-        # Load camera configuration from XML
-        self._load_camera_config()
-    
+
+        if camera_params is not None:
+            self._apply_camera_params(camera_params)
+        else:
+            # Legacy fallback: read from setting.xml's <GLRender><camera>
+            self._load_camera_config()
+
+    # ──────────────────────────────────────────────────────────────
+    #  Camera setup
+    # ──────────────────────────────────────────────────────────────
+
+    def _apply_camera_params(self, camera_params: dict) -> None:
+        """Set camera directly from a camera_params.xml dict (the correct pathway)."""
+        ep = camera_params['eyepos']
+        qt = camera_params['quat']
+        ws = camera_params['window_size']
+        self.py_camera_position = f"{ep[0]},{ep[1]},{ep[2]}"
+        self.py_camera_quat     = f"{qt[0]},{qt[1]},{qt[2]},{qt[3]}"
+        self.py_camera_window   = f"{ws[0]},{ws[1]}"
+        self.py_camera_fov      = f"{camera_params['fov']}"
+        print("Camera set from camera_params.xml:")
+        print(f"  Position: {self.py_camera_position}")
+        print(f"  Quat:     {self.py_camera_quat}")
+        print(f"  Window:   {self.py_camera_window}")
+        print(f"  FOV:      {self.py_camera_fov}")
+
+    def set_camera(self, eyepos, quat, window_size, fov) -> None:
+        """Public setter. Accepts iterables (lists/tuples) of the right length."""
+        self._apply_camera_params({
+            'eyepos': list(eyepos),
+            'quat':   list(quat),
+            'window_size': tuple(window_size),
+            'fov': fov,
+        })
+
     def _load_camera_config(self):
-        """Parse camera settings from the XML configuration file"""
+        """Parse camera settings from setting.xml (legacy fallback only)."""
         if not os.path.exists(self.xml_config_path):
             print(f"Warning: Config file {self.xml_config_path} not found. Using defaults.")
             self.py_camera_position = "0.0,20.0,2.0"
@@ -59,19 +98,19 @@ class MPMEmulator:
         try:
             tree = ET.parse(self.xml_config_path)
             root = tree.getroot()
-            
+
             # Navigate to GLRender -> camera
             gl_render_node = root.find('GLRender')
             if gl_render_node is None:
                 raise ValueError("No <GLRender> tag found in XML")
-                
+
             camera_node = gl_render_node.find('camera')
             if camera_node is None:
                 raise ValueError("No <camera> tag found under <GLRender>")
-            
+
             # Extract attributes and convert space-separated values to comma-separated
             # XML format: "x y z" -> C++ format: "x,y,z"
-            
+
             eyepos = camera_node.attrib['eyepos'].strip().replace(' ', ',')
             quat = camera_node.attrib['quat'].strip().replace(' ', ',')
             window_size = camera_node.attrib['window_size'].strip().replace(' ', ',')
@@ -81,13 +120,13 @@ class MPMEmulator:
             self.py_camera_quat = quat
             self.py_camera_window = window_size
             self.py_camera_fov = fov
-            
+
             print(f"Loaded Camera Config from {self.xml_config_path}:")
             print(f"  Position: {self.py_camera_position}")
             print(f"  Quat:     {self.py_camera_quat}")
             print(f"  Window:   {self.py_camera_window}")
             print(f"  FOV:      {self.py_camera_fov}")
-            
+
         except Exception as e:
             print(f"Error loading XML config: {e}. Using hardcoded defaults.")
             # Fallback defaults

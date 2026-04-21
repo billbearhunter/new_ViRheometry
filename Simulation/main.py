@@ -225,7 +225,7 @@ def main():
 
     # ── 9. レンダリング ──
     print("\nRendering OBJ files...")
-    renderer = MPM_Emulator.MPMEmulator()
+    renderer = MPM_Emulator.MPMEmulator(camera_params=camera_params)
     renderer.render_all(run_dir=results_root)
     print("Rendering finished.")
 

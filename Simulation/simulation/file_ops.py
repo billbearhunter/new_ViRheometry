@@ -189,7 +189,13 @@ class FileOperations:
         _sim_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         particleSkinnerApp = os.path.join(_sim_root, 'ParticleSkinner3DTaichi', 'ParticleSkinner3DTaichi.py')
 
-        cmd = f'python3 "{particleSkinnerApp}" "{0.05}" "{saveStateFilePath}" "{saveStateIntermediateFilePath}" "{outObjFilePath}" "{marching_cube_path}"'
+        # Use the simulator's actual particle half-length instead of a
+        # hardcoded 0.05 — the old value over-inflated the rendered silhouette
+        # by ~58 % (0.05 / py_particle_hl≈0.0315), producing a 3-5 px fat skin
+        # around every face that showed up as a systematic left/bottom white
+        # strip in the sim-vs-Python-cube diff.
+        h_val = float(getattr(agTaichiMPM, "py_particle_hl", 0.05))
+        cmd = f'python3 "{particleSkinnerApp}" "{h_val}" "{saveStateFilePath}" "{saveStateIntermediateFilePath}" "{outObjFilePath}" "{marching_cube_path}"'
         print(cmd)
 
         print(f'[AGTaichiMPM] generating OBJ file: {outObjFilePath}')
