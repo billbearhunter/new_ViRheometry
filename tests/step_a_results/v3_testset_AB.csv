@@ -1,0 +1,2 @@
+n,top_k,rmse_W,rmse_NW,mae_W,mae_NW,frac_W_better
+500,4,0.094159,0.131878,0.034616,0.060867,0.662000
