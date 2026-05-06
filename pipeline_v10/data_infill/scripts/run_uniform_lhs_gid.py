@@ -149,11 +149,14 @@ def main():
     ap.add_argument("--seed",   type=int,  default=42)
     ap.add_argument("--out-csv", type=Path, default=None,
                     help="Output CSV path (default: outputs/uniform_fill/lhs_gid{GID}_uniform.csv)")
+    ap.add_argument("--state-pkl", type=Path, default=None,
+                    help="Direct path to state.pkl (overrides --bank). "
+                         "Use this on worker machines: --state-pkl worker_deps/gid10/state.pkl")
     ap.add_argument("--bank",   type=Path,
                     default=PIPE.parent.parent
                               / "Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates"
                               / "Models" / "v10_yshape_planB",
-                    help="Path to planB model bank")
+                    help="Path to planB model bank (ignored if --state-pkl is given)")
     a = ap.parse_args()
 
     # -- resolve output path
@@ -171,9 +174,18 @@ def main():
     H_LO, H_HI = H_EDGES[hi], H_EDGES[hi + 1]
 
     # -- load partition state
-    state_path = a.bank / f"state_gid_{a.gid}" / "state.pkl"
+    if a.state_pkl is not None:
+        state_path = a.state_pkl
+    else:
+        state_path = a.bank / f"state_gid_{a.gid}" / "state.pkl"
+        # also check local worker_deps fallback
+        if not state_path.is_file():
+            local_fallback = INFILL / "worker_deps" / f"gid{a.gid}" / "state.pkl"
+            if local_fallback.is_file():
+                state_path = local_fallback
     if not state_path.is_file():
-        ap.error(f"state.pkl not found: {state_path}")
+        ap.error(f"state.pkl not found: {state_path}\n"
+                 f"  On worker machine use: --state-pkl worker_deps/gid{a.gid}/state.pkl")
     with open(state_path, "rb") as fh:
         st = pickle.load(fh)
 

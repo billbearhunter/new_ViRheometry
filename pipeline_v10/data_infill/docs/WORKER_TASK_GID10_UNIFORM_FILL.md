@@ -29,16 +29,11 @@ the sparse low-eta / low-sigma_y region by running LHS **in log-space**.
 
 1. Python 3.11 with Taichi 1.7.x, PyTorch, scikit-learn, pandas, numpy
 2. CUDA GPU (RTX 3070 or better recommended)
-3. This repo: `New_ViRheometry` (pipeline_v10 branch or main)
-4. Sibling repo: `Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates`
-   must exist at the same parent directory level, e.g.:
-   ```
-   GitHub/
-     New_ViRheometry/                  <- this repo
-     Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/   <- sibling
-   ```
-5. Model bank `Models/v10_yshape_planB/state_gid_10/state.pkl` must exist
-   in the sibling repo.
+3. This repo: `New_ViRheometry` (git pull to get latest)
+4. Simulation code (HeadlessSimulatorMLS / AGTaichiMPM2) already installed
+   on this machine — no extra repo needed.
+5. The partition state file is bundled in this repo:
+   `pipeline_v10/data_infill/worker_deps/gid10/state.pkl` (2.8 KB)
 
 ### Quick environment check
 ```powershell
@@ -64,7 +59,8 @@ python scripts/run_uniform_lhs_gid.py `
     --gid 10 `
     --n-sims 10000 `
     --arch cuda `
-    --seed 2026
+    --seed 2026 `
+    --state-pkl worker_deps/gid10/state.pkl
 ```
 
 ### Parameters explained
@@ -169,9 +165,10 @@ python scripts/run_uniform_lhs_gid.py --gid 10 --n-sims 10000 --arch cpu --seed 
 Slower (~5x) but no GPU required.
 
 ### "state.pkl not found"
-Ensure the sibling repo is at the same directory level:
+The state file is bundled in the repo. Make sure you ran `git pull` and
+the `--state-pkl` flag points to the right place:
 ```powershell
-ls ..\..\..\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\Models\v10_yshape_planB\state_gid_10\state.pkl
+ls pipeline_v10\data_infill\worker_deps\gid10\state.pkl
 ```
 
 ### Script crashes mid-way
